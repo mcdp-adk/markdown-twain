@@ -19,3 +19,11 @@ _Avoid_: side-by-side, dual, parallel
 **translationOnly**:
 The display mode that shows translated blocks in place of their source blocks.
 _Avoid_: translated mode, target-only
+
+**Reasoning effort**:
+How hard the model thinks before translating; one of `default` (leave it to the model), `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. `none` turns thinking off, which is not the same as `default`.
+_Avoid_: think effort, thinking level
+
+**Reasoning effort**:
+How much the model is asked to reason before it answers; `default` leaves the choice to the model, and `none` turns reasoning off.
+_Avoid_: think effort, thinking level
