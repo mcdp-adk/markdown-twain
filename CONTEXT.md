@@ -20,6 +20,10 @@ _Avoid_: side-by-side, dual, parallel
 The display mode that shows translated blocks in place of their source blocks.
 _Avoid_: translated mode, target-only
 
+**Block**:
+The unit that is translated and cached on its own: a paragraph (including one inside a list item or blockquote), a heading, or a table cell.
+_Avoid_: segment, node, unit
+
 **Reasoning effort**:
 How hard the model thinks before translating; one of `default` (leave it to the model), `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. `none` turns thinking off, which is not the same as `default`.
 _Avoid_: think effort, thinking level
