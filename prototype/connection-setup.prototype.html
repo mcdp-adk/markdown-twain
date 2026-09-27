@@ -1,0 +1,913 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connection setup prototype</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --ink: #1d2330; --muted: #667085; --line: #e3e6eb;
+    --accent: #2f6fde; --accent-soft: #e8f0fd; --ok: #1f8a4c; --bad: #c2352b; --warn: #a86b00;
+    --vs-bg: #1f1f1f; --vs-panel: #252526; --vs-ink: #cccccc; --vs-line: #3c3c3c; --vs-sel: #04395e;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 20px 24px 8px; max-width: 1400px; margin: 0 auto; }
+  .tag { display: inline-block; font: 600 11px var(--mono); letter-spacing: .06em; color: var(--bad); border: 1px solid var(--bad); border-radius: 4px; padding: 1px 6px; }
+  h1 { margin: 8px 0 4px; font-size: 22px; }
+  h2 { margin: 18px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  p.lede { margin: 0 0 12px; max-width: 900px; color: #394150; }
+  main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 24px; padding: 0 24px 40px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  button { font: inherit; cursor: pointer; }
+  .shapes { display: flex; gap: 8px; flex-wrap: wrap; }
+  .shape { text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; max-width: 330px; }
+  .shape b { display: block; }
+  .shape span { color: var(--muted); font-size: 12.5px; }
+  .shape.on { border-color: var(--accent); background: var(--accent-soft); }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .btn { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .world label { display: inline-flex; align-items: center; gap: 6px; margin: 2px 14px 2px 0; font-size: 13px; }
+  code, .mono { font-family: var(--mono); font-size: 12.5px; }
+
+  /* simulated VS Code window */
+  .vscode { background: var(--vs-bg); color: var(--vs-ink); border-radius: 8px; overflow: hidden; position: relative; min-height: 430px; display: flex; flex-direction: column; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+  .vs-title { background: #181818; padding: 6px 12px; font-size: 12px; color: #9d9d9d; display: flex; justify-content: space-between; }
+  .vs-editor { flex: 1; padding: 60px 24px 24px; color: #6a6a6a; font-size: 13px; }
+  .vs-status { background: #181818; border-top: 1px solid var(--vs-line); font-size: 12px; padding: 3px 10px; display: flex; justify-content: flex-end; gap: 14px; color: #9d9d9d; }
+  .vs-status .item { cursor: pointer; padding: 0 4px; }
+  .vs-status .item:hover { background: #333; }
+  .vs-status .idea { color: #6a6a6a; font-style: italic; }
+  .qp { position: absolute; left: 50%; top: 34px; transform: translateX(-50%); width: min(560px, 92%); background: var(--vs-panel); border: 1px solid #454545; border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.5); font-size: 13px; z-index: 2; }
+  .qp-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 0; color: #bbb; font-size: 12px; }
+  .qp-head .back { background: none; border: none; color: #ccc; padding: 0 4px; font-size: 14px; }
+  .qp-head .count { margin-left: auto; color: #888; }
+  .qp-input { display: flex; padding: 6px 8px; }
+  .qp-input input { flex: 1; background: #313131; border: 1px solid var(--vs-sel); color: #eee; padding: 4px 6px; border-radius: 2px; font: 13px system-ui, sans-serif; outline: none; }
+  .qp-msg { padding: 0 10px 6px; color: #aaa; font-size: 12px; }
+  .qp-msg.err { color: #f48771; }
+  .qp-items { max-height: 260px; overflow: auto; padding-bottom: 4px; }
+  .qp-item { padding: 3px 12px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
+  .qp-item:hover, .qp-item.active { background: var(--vs-sel); }
+  .qp-item .desc { color: #9d9d9d; font-size: 12px; }
+  .qp-item .detail { display: block; color: #8b8b8b; font-size: 11.5px; }
+  .qp-item .check { width: 12px; color: #3794ff; }
+  .qp-sep { border-top: 1px solid var(--vs-line); margin: 3px 0; padding: 2px 12px 0; text-align: right; color: #777; font-size: 11px; }
+  .toasts { position: absolute; right: 10px; bottom: 30px; width: min(430px, 92%); display: flex; flex-direction: column; gap: 6px; z-index: 1; }
+  .toast { background: var(--vs-panel); border: 1px solid #454545; border-radius: 4px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 2px 10px rgba(0,0,0,.4); }
+  .toast .ico { font-weight: 700; margin-right: 6px; }
+  .toast.info .ico { color: #3794ff; } .toast.error .ico { color: #f48771; } .toast.warn .ico { color: #cca700; }
+  .toast .acts { margin-top: 6px; display: flex; gap: 6px; justify-content: flex-end; }
+  .toast .acts button { background: #0e639c; color: #fff; border: none; border-radius: 2px; padding: 2px 8px; font-size: 12px; }
+  .toast .acts button.sec { background: #3a3d41; }
+  .toast .x { float: right; background: none; border: none; color: #999; padding: 0 2px; }
+
+  /* state panels */
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .pill { display: inline-block; border-radius: 10px; padding: 0 8px; font-size: 12px; }
+  .pill.ok { background: #e3f4ea; color: var(--ok); } .pill.bad { background: #fbe7e5; color: var(--bad); } .pill.warn { background: #fdf1d8; color: var(--warn); }
+  pre.json { margin: 0; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  pre.json .chg { background: #fff3bf; }
+  .secret-row { font: 12.5px var(--mono); padding: 2px 0; }
+  .secret-row.chg { background: #fff3bf; }
+  .sui-row { display: grid; grid-template-columns: 170px 1fr; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); align-items: start; font-size: 13px; }
+  .sui-row:first-child { border-top: none; }
+  .sui-row .name b { display: block; }
+  .sui-row .name span { color: var(--muted); font-size: 12px; }
+  .sui-row select, .sui-row input { font: 13px system-ui, sans-serif; padding: 2px 4px; width: 100%; max-width: 320px; }
+  .sui-row a { color: var(--accent); cursor: pointer; }
+  ol.log { margin: 0; padding-left: 20px; font: 12px/1.5 var(--mono); max-height: 260px; overflow: auto; }
+  ol.log li.w { color: #8a5a00; } ol.log li.n { color: #155d9c; } ol.log li.e { color: var(--bad); }
+
+  /* walkthroughs */
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+  .tab { background: none; border: none; border-bottom: 2px solid transparent; padding: 6px 10px; color: var(--muted); }
+  .tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  .steps { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+  .step { text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; color: var(--muted); }
+  .step.next { border-color: var(--accent); color: var(--ink); background: var(--accent-soft); }
+  .step.done { text-decoration: line-through; opacity: .6; }
+  .watch { margin-top: 8px; font-size: 13px; color: #394150; background: #fffbe8; border: 1px solid #f1e3a6; border-radius: 6px; padding: 6px 10px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="tag">PROTOTYPE · THROWAWAY</span>
+  <h1>How should setting up an LLM connection feel?</h1>
+  <p class="lede">
+    Wayfinder ticket <a href="https://github.com/mcdp-adk/markdown-twain/issues/10">Prototype the LLM connection setup flow</a>.
+    The goal is "pick a provider, give it a key, pick a model, done". The question is which <b>shape</b> the saved configuration takes,
+    and what the QuickPick flow on top of it feels like: <b>A</b> one connection, <b>B</b> one active provider that remembers its model and effort per provider,
+    or <b>C</b> several named connections. Everything is simulated. Provider responses and model lists are fake, and nothing leaves this page.
+    Each shape keeps its own state, so you can switch tabs and compare.
+  </p>
+  <div class="shapes" id="shapes"></div>
+</header>
+
+<main>
+  <section>
+    <h2>VS Code (simulated). Click items, or type and press Enter</h2>
+    <div class="vscode">
+      <div class="vs-title"><span>README.md (Preview), Markdown Twain</span><span>Ctrl+Shift+P → commands below</span></div>
+      <div id="qp"></div>
+      <div class="vs-editor">The Markdown preview would be here.</div>
+      <div class="toasts" id="toasts"></div>
+      <div class="vs-status" id="status"></div>
+    </div>
+
+    <h2>Commands (free play)</h2>
+    <div class="btns" id="commands"></div>
+
+    <h2>The world outside VS Code</h2>
+    <div class="card world" id="world"></div>
+
+    <h2>Guided walkthroughs (each one resets this shape's state first)</h2>
+    <div class="card">
+      <div class="tabs" id="walk-tabs"></div>
+      <div id="walk"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What translation would use right now</h2>
+    <div class="card" id="effective"></div>
+
+    <h2>settings.json (User). Changed keys highlighted</h2>
+    <div class="card"><pre class="json" id="settings"></pre></div>
+
+    <h2>SecretStorage</h2>
+    <div class="card" id="secrets"></div>
+
+    <h2>Native Settings UI (editable, like the real one)</h2>
+    <div class="card" id="sui"></div>
+
+    <h2>Log</h2>
+    <div class="card"><ol class="log" id="log"></ol></div>
+  </section>
+</main>
+
+<!-- ======================================================================
+     PORTABLE LOGIC MODULE: pure, no DOM. This is what would lift into src/.
+     ====================================================================== -->
+<script>
+const Twain = (() => {
+  const PRESETS = [
+    { id: 'openai',      label: 'OpenAI',       baseUrl: 'https://api.openai.com/v1',    apiKeyEnv: 'OPENAI_API_KEY',     effortStyle: 'reasoning_effort' },
+    { id: 'openrouter',  label: 'OpenRouter',   baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', effortStyle: 'openrouter' },
+    { id: 'deepseek',    label: 'DeepSeek',     baseUrl: 'https://api.deepseek.com',     apiKeyEnv: 'DEEPSEEK_API_KEY',   effortStyle: 'reasoning_effort' },
+    { id: 'ollamaCloud', label: 'Ollama Cloud', baseUrl: 'https://ollama.com/v1',        apiKeyEnv: 'OLLAMA_API_KEY',     effortStyle: 'reasoning_effort' },
+  ];
+  const CUSTOM = { id: 'custom', label: 'Custom', effortStyle: 'reasoning_effort' };
+  const presetOf = id => PRESETS.find(p => p.id === id) || (id === 'custom' ? CUSTOM : null);
+
+  const EFFORTS = [
+    { id: 'default', detail: "Don't send; use the model's default" },
+    { id: 'none',    detail: 'Turn thinking off' },
+    { id: 'minimal', detail: '' }, { id: 'low', detail: '' }, { id: 'medium', detail: '' },
+    { id: 'high', detail: '' }, { id: 'xhigh', detail: '' }, { id: 'max', detail: '' },
+  ];
+
+  const SHAPES = {
+    single:      { key: 'A', name: 'One connection',          blurb: 'Provider, model and effort are single settings. Switching provider means picking a model again.' },
+    perProvider: { key: 'B', name: 'Remembered per provider', blurb: 'One active provider, but each provider remembers its own model and effort. Switching back restores them.' },
+    connections: { key: 'C', name: 'Named connections',       blurb: 'A list of named connections (e.g. "Work OpenAI", "Local Ollama"); one is active.' },
+  };
+
+  const P = 'markdownTwain.';
+  const clone = o => JSON.parse(JSON.stringify(o));
+  const initialState = shape => ({ shape, settings: {}, secrets: {} });
+
+  // ---- reading a profile (the connection data translation would use) ----
+  function connections(state) { return state.settings[P + 'connections'] || []; }
+  function activeRef(state) {
+    const s = state.settings;
+    if (state.shape === 'connections') {
+      const list = connections(state);
+      const name = s[P + 'activeConnection'];
+      const c = list.find(c => c.name === name) || (name ? null : list[0]);
+      return { connection: c ? c.name : null, missingName: c ? null : name };
+    }
+    return { provider: s[P + 'provider'] || 'openai' };
+  }
+  function profileFor(state, ref) {
+    const s = state.settings;
+    if (state.shape === 'single') {
+      const custom = ref.provider === 'custom';
+      return { provider: ref.provider, baseUrl: custom ? (s[P + 'customBaseUrl'] || '') : '', apiKeyEnv: custom ? (s[P + 'customApiKeyEnv'] || '') : '',
+               model: s[P + 'model'] || '', effort: s[P + 'reasoningEffort'] || 'default', secretId: 'apiKey.' + ref.provider };
+    }
+    if (state.shape === 'perProvider') {
+      const slot = (s[P + 'providers'] || {})[ref.provider] || {};
+      return { provider: ref.provider, baseUrl: slot.baseUrl || '', apiKeyEnv: slot.apiKeyEnv || '',
+               model: slot.model || '', effort: slot.reasoningEffort || 'default', secretId: 'apiKey.' + ref.provider };
+    }
+    const c = connections(state).find(c => c.name === ref.connection);
+    if (!c) return null;
+    return { name: c.name, provider: c.provider, baseUrl: c.baseUrl || '', apiKeyEnv: c.apiKeyEnv || '',
+             model: c.model || '', effort: c.reasoningEffort || 'default', secretId: 'apiKey.' + c.name };
+  }
+  function baseUrlOf(pr) { return pr.provider === 'custom' ? pr.baseUrl : presetOf(pr.provider).baseUrl; }
+  function envNameOf(pr) { return pr.provider === 'custom' ? pr.apiKeyEnv : presetOf(pr.provider).apiKeyEnv; }
+
+  // key resolution: SecretStorage first, then the environment variable
+  function resolveKey(state, pr, env, draftKey) {
+    if (draftKey !== undefined) return draftKey;
+    if (pr.secretId && state.secrets[pr.secretId]) return { source: 'secret', id: pr.secretId, value: state.secrets[pr.secretId] };
+    const name = envNameOf(pr);
+    if (name && env[name]) return { source: 'env', id: name, value: env[name] };
+    return { source: 'none', id: name || null, value: null };
+  }
+
+  function effortFields(style, effort) {
+    if (effort === 'default') return {};
+    if (style === 'openrouter') return { reasoning: { effort } };
+    if (style === 'enable_thinking') return { enable_thinking: effort !== 'none' };
+    return { reasoning_effort: effort };
+  }
+
+  function problems(pr, key) {
+    const out = [];
+    if (pr.provider === 'custom' && !pr.baseUrl) out.push('No base URL');
+    if (pr.provider !== 'custom' && key.source === 'none') out.push('No API key');
+    if (!pr.model) out.push('No model');
+    return out;
+  }
+
+  function effective(state, env) {
+    const ref = activeRef(state);
+    const pr = profileFor(state, ref);
+    if (!pr) return { none: true, missingName: ref.missingName };
+    const key = resolveKey(state, pr, env);
+    const style = presetOf(pr.provider).effortStyle;
+    return {
+      profile: pr, label: pr.name || presetOf(pr.provider).label, baseUrl: baseUrlOf(pr), key, style,
+      problems: problems(pr, key),
+      testRequest: {
+        url: (baseUrlOf(pr) || '<base URL>') + '/chat/completions',
+        body: Object.assign({ model: pr.model || '<model>', stream: true, messages: [{ role: 'user', content: 'ping' }] }, effortFields(style, pr.effort)),
+      },
+    };
+  }
+
+  // ---- writing a profile ----
+  function writeProfile(state, ref, patch) {
+    const st = clone(state), s = st.settings;
+    if (st.shape === 'single') {
+      s[P + 'provider'] = ref.provider;
+      if (ref.provider === 'custom') {
+        if ('baseUrl' in patch) s[P + 'customBaseUrl'] = patch.baseUrl;
+        if ('apiKeyEnv' in patch) { if (patch.apiKeyEnv) s[P + 'customApiKeyEnv'] = patch.apiKeyEnv; else delete s[P + 'customApiKeyEnv']; }
+      }
+      if ('model' in patch) s[P + 'model'] = patch.model;
+      if ('effort' in patch) s[P + 'reasoningEffort'] = patch.effort;
+    } else if (st.shape === 'perProvider') {
+      s[P + 'provider'] = ref.provider;
+      const all = s[P + 'providers'] = s[P + 'providers'] || {};
+      const slot = all[ref.provider] = all[ref.provider] || {};
+      if (ref.provider === 'custom' && 'baseUrl' in patch) slot.baseUrl = patch.baseUrl;
+      if (ref.provider === 'custom' && 'apiKeyEnv' in patch) { if (patch.apiKeyEnv) slot.apiKeyEnv = patch.apiKeyEnv; else delete slot.apiKeyEnv; }
+      if ('model' in patch) slot.model = patch.model;
+      if ('effort' in patch) slot.reasoningEffort = patch.effort;
+    } else {
+      const list = s[P + 'connections'] = s[P + 'connections'] || [];
+      let c = list.find(c => c.name === ref.connection);
+      if (!c) { c = { name: ref.connection, provider: patch.provider }; list.push(c); }
+      if ('provider' in patch) c.provider = patch.provider;
+      if ('baseUrl' in patch && c.provider === 'custom') c.baseUrl = patch.baseUrl;
+      if (c.provider !== 'custom') delete c.baseUrl;
+      if ('apiKeyEnv' in patch) { if (patch.apiKeyEnv) c.apiKeyEnv = patch.apiKeyEnv; else delete c.apiKeyEnv; }
+      if ('model' in patch) c.model = patch.model;
+      if ('effort' in patch) c.reasoningEffort = patch.effort;
+      s[P + 'activeConnection'] = ref.connection;
+    }
+    return st;
+  }
+  function setSecret(state, id, value) {
+    const st = clone(state);
+    if (value) st.secrets[id] = value; else delete st.secrets[id];
+    return st;
+  }
+  function removeConnection(state, name) {
+    let st = clone(state);
+    st.settings[P + 'connections'] = connections(st).filter(c => c.name !== name);
+    if (st.settings[P + 'activeConnection'] === name) {
+      const first = st.settings[P + 'connections'][0];
+      if (first) st.settings[P + 'activeConnection'] = first.name; else delete st.settings[P + 'activeConnection'];
+    }
+    return setSecret(st, 'apiKey.' + name, null);
+  }
+
+  // ---- the multi-step QuickPick flow, as pure data ----
+  // A wizard is { cmd, answers }. The step sequence is recomputed from the answers,
+  // so "Back" is simply forgetting the last answer.
+  const COMMANDS = {
+    setup:       { title: 'Set Up LLM Connection',  shapes: ['single', 'perProvider', 'connections'] },
+    switch:      { title: 'Switch Provider',        shapes: ['perProvider'] },
+    switchConn:  { title: 'Switch Connection',      shapes: ['connections'] },
+    model:       { title: 'Select Model',           shapes: ['single', 'perProvider', 'connections'] },
+    effort:      { title: 'Set Reasoning Effort',   shapes: ['single', 'perProvider', 'connections'] },
+    key:         { title: 'Set API Key',            shapes: ['single', 'perProvider', 'connections'] },
+    clearKey:    { title: 'Clear API Key',          shapes: ['single', 'perProvider', 'connections'] },
+    remove:      { title: 'Remove Connection',      shapes: ['connections'] },
+    test:        { title: 'Test Connection',        shapes: ['single', 'perProvider', 'connections'] },
+  };
+
+  function refFor(state, w) {
+    const a = w.answers;
+    if (state.shape === 'connections') {
+      if (a.connection === '__new') return { connection: null, isNew: true };
+      return { connection: a.connection || activeRef(state).connection };
+    }
+    return { provider: a.provider || activeRef(state).provider };
+  }
+
+  // the profile as it would be if the wizard finished now
+  function draft(state, w) {
+    const a = w.answers, ref = refFor(state, w);
+    let pr = ref.isNew ? { provider: a.provider || 'openai', baseUrl: '', apiKeyEnv: '', model: '', effort: 'default', secretId: null }
+                       : profileFor(state, ref);
+    if (!pr) pr = { provider: 'openai', baseUrl: '', apiKeyEnv: '', model: '', effort: 'default', secretId: null };
+    pr = Object.assign({}, pr);
+    if (a.provider) {
+      if (state.shape === 'connections' && a.provider !== pr.provider) { pr.baseUrl = ''; pr.apiKeyEnv = ''; }
+      pr.provider = a.provider;
+    }
+    if (a.baseUrl !== undefined) pr.baseUrl = a.baseUrl;
+    if (a.key === 'envNamed' && a.envName !== undefined) pr.apiKeyEnv = a.envName;
+    if (a.key === 'none') pr.apiKeyEnv = '';
+    if (a.model !== undefined) pr.model = a.model === '__manual' ? (a.modelInput || '') : a.model;
+    if (a.effort !== undefined) pr.effort = a.effort;
+    if (ref.isNew && a.name) { pr.name = a.name; pr.secretId = 'apiKey.' + a.name; }
+    return pr;
+  }
+  function draftKey(state, w, env) {
+    const a = w.answers, pr = draft(state, w);
+    if (a.key === 'enter' && a.keyInput) return { source: 'secret', value: a.keyInput };
+    if (a.key === 'env' || a.key === 'envNamed') { const n = envNameOf(pr); return { source: 'env', id: n, value: env[n] || null }; }
+    if (a.key === 'none') return { source: 'none', value: null };
+    return resolveKey(state, Object.assign({}, pr, { secretId: pr.secretId }), env);
+  }
+
+  function isComplete(state, pr, env) {
+    return !problems(pr, resolveKey(state, pr, env)).length;
+  }
+
+  function sequence(state, w, env) {
+    const a = w.answers, seq = [];
+    const keySteps = () => { seq.push('key'); if (a.key === 'enter') seq.push('keyInput'); if (a.key === 'envNamed') seq.push('envName'); };
+    const modelSteps = () => { seq.push('model'); if (a.model === '__manual') seq.push('modelInput'); };
+    const full = withProvider => {
+      if (withProvider) seq.push('provider');
+      if (draft(state, w).provider === 'custom') seq.push('baseUrl');
+      keySteps(); modelSteps(); seq.push('effort');
+    };
+    switch (w.cmd) {
+      case 'setup':
+        if (state.shape === 'connections' && connections(state).length) seq.push('connection');
+        full(true);
+        if (state.shape === 'connections' && (refFor(state, w).isNew || !connections(state).length)) seq.push('name');
+        break;
+      case 'switch': // B: jump straight back if that provider is already complete
+        seq.push('provider');
+        if (a.provider && !isComplete(state, profileFor(state, { provider: a.provider }), env)) full(false);
+        break;
+      case 'switchConn':
+        seq.push('connection');
+        if (a.connection === '__new') { full(true); seq.push('name'); }
+        break;
+      case 'model': modelSteps(); break;
+      case 'effort': seq.push('effort'); break;
+      case 'key':
+        seq.push('key');
+        if (a.key === 'enter') seq.push('keyInput'); if (a.key === 'envNamed') seq.push('envName');
+        break;
+      case 'remove': seq.push('removeConn'); break;
+    }
+    return seq;
+  }
+  function currentStep(state, w, env) {
+    const seq = sequence(state, w, env);
+    const idx = seq.findIndex(id => !(id in w.answers));
+    return { id: idx < 0 ? null : seq[idx], index: idx, total: seq.length };
+  }
+  function answer(w, stepId, value) { return { cmd: w.cmd, answers: Object.assign({}, w.answers, { [stepId]: value }) }; }
+  function back(state, w, env) {
+    const seq = sequence(state, w, env);
+    const answered = seq.filter(id => id in w.answers);
+    if (!answered.length) return w;
+    const answers = Object.assign({}, w.answers);
+    delete answers[answered[answered.length - 1]];
+    return { cmd: w.cmd, answers };
+  }
+
+  // what the QuickPick / InputBox shows for the current step
+  function stepView(state, w, env, world) {
+    const step = currentStep(state, w, env);
+    if (!step.id) return null;
+    const pr = draft(state, w), title = COMMANDS[w.cmd].title;
+    const base = { id: step.id, title, index: step.index, total: step.total, canBack: step.index > 0 };
+    const mask = v => v ? v.slice(0, 7) + '…' + v.slice(-4) : '';
+    switch (step.id) {
+      case 'connection': {
+        const act = activeRef(state).connection;
+        const items = connections(state).map(c => ({ id: c.name, label: c.name,
+          description: (c.name === act ? 'active · ' : '') + presetOf(c.provider).label + (c.model ? ' · ' + c.model : ''), picked: c.name === act }));
+        items.push({ sep: true }, { id: '__new', label: '+ New connection…' });
+        return Object.assign(base, { kind: 'pick', placeholder: w.cmd === 'setup' ? 'Pick a connection to edit, or add one' : 'Switch the active connection', items });
+      }
+      case 'provider': {
+        const cur = state.shape === 'connections' && refFor(state, w).isNew ? null : pr.provider;
+        const items = PRESETS.map(p => {
+          let desc = p.baseUrl.replace('https://', '');
+          if (state.shape === 'perProvider') { const sp = profileFor(state, { provider: p.id }); if (sp.model) desc = 'remembered: ' + sp.model; }
+          return { id: p.id, label: p.label, description: desc, picked: p.id === cur };
+        });
+        let cdesc = 'any OpenAI-compatible base URL';
+        if (state.shape !== 'connections') { const sp = profileFor(state, { provider: 'custom' }); if (sp.baseUrl) cdesc = sp.baseUrl + (sp.model ? ' · ' + sp.model : ''); }
+        items.push({ sep: true }, { id: 'custom', label: 'Custom…', description: cdesc, picked: cur === 'custom' });
+        return Object.assign(base, { kind: 'pick', placeholder: 'Pick a provider', items });
+      }
+      case 'baseUrl':
+        return Object.assign(base, { kind: 'input', prompt: 'Base URL of an OpenAI-compatible API, including any /v1. Nothing is appended.',
+          placeholder: 'http://localhost:11434/v1', value: pr.baseUrl || '' });
+      case 'key': {
+        const stored = pr.secretId && state.secrets[pr.secretId];
+        const items = [];
+        if (stored) items.push({ id: 'keep', label: 'Keep the saved key', description: mask(stored) });
+        items.push({ id: 'enter', label: stored ? 'Replace it with a new key…' : 'Enter an API key…', description: 'saved in VS Code SecretStorage' });
+        if (pr.provider === 'custom') {
+          items.push({ id: 'envNamed', label: 'Read it from an environment variable…', description: pr.apiKeyEnv ? 'currently $' + pr.apiKeyEnv : '' });
+          items.push({ id: 'none', label: 'No key', description: 'e.g. a local server' });
+        } else {
+          const n = envNameOf(pr);
+          if (env[n]) items.push({ id: 'env', label: 'Use $' + n, description: 'found in the environment: ' + mask(env[n]) });
+        }
+        const n = envNameOf(pr);
+        const msg = pr.provider !== 'custom' && !env[n] ? 'Tip: you can also export ' + n + ' before starting VS Code.' : '';
+        return Object.assign(base, { kind: 'pick', placeholder: 'API key for ' + (pr.provider === 'custom' ? (pr.baseUrl || 'custom') : presetOf(pr.provider).label), message: msg, items });
+      }
+      case 'keyInput':
+        return Object.assign(base, { kind: 'input', password: true, prompt: 'Paste your ' + presetOf(pr.provider).label + ' API key. It is kept in SecretStorage, never in settings.json.', placeholder: 'sk-…', value: '' });
+      case 'envName':
+        return Object.assign(base, { kind: 'input', prompt: 'Name of the environment variable that holds the key', placeholder: 'MY_LLM_KEY', value: pr.apiKeyEnv || '' });
+      case 'model': {
+        const key = draftKey(state, w, env);
+        const res = world.listModels(pr, baseUrlOf(pr), key);
+        const items = [{ id: '__manual', label: '✎ Enter a model ID…' }, { sep: true, label: res.ok ? res.models.length + ' models from GET /models' : '' }];
+        if (res.ok) res.models.forEach(m => items.push({ id: m, label: m, picked: m === pr.model, description: m === pr.model ? 'current' : '' }));
+        let msg = res.ok ? '' : "Couldn't load models: " + res.error;
+        if (res.ok && pr.model && !res.models.includes(pr.model)) msg = 'Current model "' + pr.model + '" is not in this provider\'s list.';
+        return Object.assign(base, { kind: 'pick', placeholder: 'Pick a model (type to filter)', message: msg, error: !res.ok, items, fetched: res });
+      }
+      case 'modelInput':
+        return Object.assign(base, { kind: 'input', prompt: 'Model ID exactly as the provider expects it', placeholder: 'gpt-5-mini', value: pr.model || '' });
+      case 'effort': {
+        const style = presetOf(pr.provider).effortStyle;
+        const items = EFFORTS.map(e => ({ id: e.id, label: e.id, description: (e.id === pr.effort ? 'current · ' : '') + e.detail, picked: e.id === pr.effort,
+          detail: e.id === 'default' ? '' : 'sends ' + JSON.stringify(effortFields(style, e.id)) }));
+        return Object.assign(base, { kind: 'pick', placeholder: 'Reasoning effort' + (state.shape === 'single' ? ' (applies to every provider)' : ' for this ' + (state.shape === 'connections' ? 'connection' : 'provider')), items });
+      }
+      case 'name': {
+        const suggested = pr.provider === 'custom' ? (hostOf(pr.baseUrl) || 'Custom') : presetOf(pr.provider).label;
+        let name = suggested, i = 2; while (connections(state).some(c => c.name === name)) name = suggested + ' ' + i++;
+        return Object.assign(base, { kind: 'input', prompt: 'Name this connection', placeholder: name, value: name });
+      }
+      case 'removeConn':
+        return Object.assign(base, { kind: 'pick', placeholder: 'Remove which connection? Its saved key is deleted too.',
+          items: connections(state).map(c => ({ id: c.name, label: c.name, description: presetOf(c.provider).label + (c.model ? ' · ' + c.model : '') })) });
+    }
+  }
+  function hostOf(url) { try { return new URL(url).host; } catch { return ''; } }
+
+  // apply a finished wizard; returns { state, changes[], runTest }
+  function finish(state, w, env) {
+    const a = w.answers, ref = refFor(state, w), pr = draft(state, w), changes = [];
+    let st = state;
+    if (w.cmd === 'remove') {
+      st = removeConnection(st, a.removeConn); changes.push('removed connection "' + a.removeConn + '" and its saved key');
+      return { state: st, changes, runTest: false };
+    }
+    if (w.cmd === 'switchConn' && a.connection !== '__new') {
+      st = clone(st); st.settings[P + 'activeConnection'] = a.connection; changes.push('activeConnection = ' + a.connection);
+      return { state: st, changes, runTest: true };
+    }
+    const r = state.shape === 'connections' ? { connection: ref.isNew || !ref.connection ? pr.name || a.name : ref.connection } : { provider: pr.provider };
+    const patch = {};
+    if ('provider' in a) patch.provider = pr.provider;
+    if ('baseUrl' in a) patch.baseUrl = pr.baseUrl;
+    if (a.key === 'envNamed' || a.key === 'none') patch.apiKeyEnv = pr.apiKeyEnv;
+    if ('model' in a) patch.model = pr.model;
+    if ('effort' in a) patch.effort = pr.effort;
+    if (state.shape === 'connections' && (ref.isNew || !ref.connection)) patch.provider = pr.provider;
+    st = writeProfile(st, r, patch);
+    const secretId = state.shape === 'connections' ? 'apiKey.' + r.connection : 'apiKey.' + pr.provider;
+    if (a.key === 'enter') { st = setSecret(st, secretId, a.keyInput); changes.push('saved key in SecretStorage as ' + secretId); }
+    if (['env', 'envNamed', 'none'].includes(a.key) && st.secrets[secretId]) { st = setSecret(st, secretId, null); changes.push('deleted ' + secretId + ' so the environment variable wins'); }
+    return { state: st, changes, runTest: ['setup', 'switch', 'switchConn', 'key'].includes(w.cmd) };
+  }
+
+  function clearKey(state, env) {
+    const eff = effective(state, env);
+    if (eff.none || !eff.profile.secretId || !state.secrets[eff.profile.secretId]) return { state, changes: [], note: 'No saved key to clear.' };
+    return { state: setSecret(state, eff.profile.secretId, null), changes: ['deleted ' + eff.profile.secretId] };
+  }
+
+  return { PRESETS, EFFORTS, SHAPES, COMMANDS, P, presetOf, initialState, effective, stepView, currentStep, answer, back, finish, clearKey,
+           writeProfile, setSecret, effortFields, hostOf };
+})();
+</script>
+
+<!-- ======================================================================
+     FAKE WORLD: providers, env vars, network. Not part of the design.
+     ====================================================================== -->
+<script>
+const FAKE_MODELS = {
+  'api.openai.com': ['gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o-mini', 'o4-mini', 'text-embedding-3-small', 'text-embedding-3-large', 'tts-1', 'whisper-1', 'dall-e-3', 'omni-moderation-latest'],
+  'openrouter.ai': ['openai/gpt-5-mini', 'openai/gpt-5', 'anthropic/claude-sonnet-5', 'anthropic/claude-haiku-4.5', 'google/gemini-3-flash', 'google/gemini-3-pro', 'deepseek/deepseek-chat-v3.2', 'qwen/qwen3-235b-a22b', 'meta-llama/llama-4-maverick', 'moonshotai/kimi-k2', 'x-ai/grok-4-fast', 'mistralai/mistral-medium-3.1'],
+  'api.deepseek.com': ['deepseek-chat', 'deepseek-reasoner'],
+  'ollama.com': ['gpt-oss:120b', 'gpt-oss:20b', 'qwen3-coder:480b', 'deepseek-v3.1:671b', 'kimi-k2:1t', 'glm-4.6'],
+  'localhost:11434': ['qwen3:8b', 'llama3.2:3b', 'gemma3:12b'],
+  'api.siliconflow.cn': ['Qwen/Qwen3-8B', 'deepseek-ai/DeepSeek-V3.2', 'THUDM/GLM-4-9B-0414'],
+};
+const PUBLIC_MODELS = ['openrouter.ai', 'ollama.com', 'localhost:11434'];
+const ENV_VALUES = { OPENAI_API_KEY: 'sk-env-openai-7788', OPENROUTER_API_KEY: 'sk-or-env-5566', DEEPSEEK_API_KEY: 'sk-env-ds-3344', OLLAMA_API_KEY: 'ol-env-1122', MY_LLM_KEY: 'sk-env-mine-9900' };
+
+function makeWorld(flags) {
+  const env = {}; Object.keys(ENV_VALUES).forEach(k => { if (flags.env[k]) env[k] = ENV_VALUES[k]; });
+  const reach = host => host === 'localhost:11434' ? flags.localServer : flags.online && host in FAKE_MODELS;
+  const unreachable = host => host === 'localhost:11434' ? 'connect ECONNREFUSED 127.0.0.1:11434' : flags.online ? 'getaddrinfo ENOTFOUND ' + host : 'fetch failed (network is offline)';
+  const keyBad = key => key && key.value && /bad/.test(key.value);
+  return {
+    env,
+    listModels(pr, baseUrl, key) {
+      const host = Twain.hostOf(baseUrl);
+      if (!host) return { ok: false, error: 'no base URL' };
+      if (!reach(host)) return { ok: false, error: unreachable(host), log: 'GET ' + baseUrl + '/models → network error' };
+      if (!PUBLIC_MODELS.includes(host) && (!key || !key.value)) return { ok: false, error: '401 Missing API key', log: 'GET ' + baseUrl + '/models → 401' };
+      if (!PUBLIC_MODELS.includes(host) && keyBad(key)) return { ok: false, error: '401 Incorrect API key provided', log: 'GET ' + baseUrl + '/models → 401' };
+      return { ok: true, models: FAKE_MODELS[host], log: 'GET ' + baseUrl + '/models → 200 (' + FAKE_MODELS[host].length + ' models' + (PUBLIC_MODELS.includes(host) ? ', public endpoint, key not checked' : '') + ')' };
+    },
+    test(eff) {
+      const pr = eff.profile, label = eff.label, host = Twain.hostOf(eff.baseUrl);
+      const req = 'POST ' + eff.testRequest.url + ' (stream) ' + JSON.stringify(Twain.effortFields(eff.style, pr.effort));
+      if (pr.provider === 'custom' && !pr.baseUrl) return { ok: false, msg: 'No base URL set for the custom provider.', acts: ['setup'] };
+      if (!pr.model) return { ok: false, msg: 'No model selected for ' + label + '.', acts: ['model'] };
+      if (pr.provider !== 'custom' && eff.key.source === 'none') return { ok: false, msg: 'No API key for ' + label + '. Set one, or export ' + Twain.presetOf(pr.provider).apiKeyEnv + ' and restart VS Code.', acts: ['key'] };
+      if (!reach(host)) return { ok: false, msg: "Couldn't reach " + host + ': ' + unreachable(host) + '. Check the network, proxy, or base URL.', acts: ['test'], log: req + ' → network error' };
+      if (keyBad(eff.key)) return { ok: false, msg: label + ' rejected the API key (401): Incorrect API key provided.' + (eff.key.source === 'env' ? ' (from $' + eff.key.id + ')' : ''), acts: ['key'], log: req + ' → 401' };
+      if (!FAKE_MODELS[host].includes(pr.model)) return { ok: false, msg: label + ' returned 404: model "' + pr.model + '" does not exist.', acts: ['model'], log: req + ' → 404' };
+      if (pr.effort !== 'default' && flags.effortRejected) return { ok: false, msg: label + ' returned 400: Unsupported parameter for this model. Reasoning effort is set to `' + pr.effort + '`; try `default`.', acts: ['effort'], log: req + ' → 400' };
+      const ms = 300 + (pr.model.length * 37) % 700;
+      return { ok: true, msg: 'Connected to ' + label + ' · ' + pr.model + (pr.effort !== 'default' ? ' · effort ' + pr.effort : '') + '. First token after ' + ms + ' ms.', log: req + ' → 200, first chunk, cancelled' };
+    },
+  };
+}
+</script>
+
+<!-- ======================================================================
+     PAGE SHELL: throwaway.
+     ====================================================================== -->
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const DEFAULT_FLAGS = () => ({ env: {}, online: true, localServer: false, effortRejected: false });
+
+const app = {
+  shape: 'single',
+  per: {},  // per-shape { state, prev, wiz, toasts, log, filter, flags }
+};
+function fresh(shape) { return { state: Twain.initialState(shape), prev: Twain.initialState(shape), wiz: null, toasts: [], log: [], filter: '', flags: DEFAULT_FLAGS(), walk: 0, walkDone: 0 }; }
+Object.keys(Twain.SHAPES).forEach(s => app.per[s] = fresh(s));
+const cur = () => app.per[app.shape];
+const world = () => makeWorld(cur().flags);
+
+function log(text, cls) { cur().log.push({ text, cls }); }
+function toast(kind, msg, acts) { cur().toasts.unshift({ kind, msg, acts: acts || [] }); cur().toasts = cur().toasts.slice(0, 3); }
+function setState(st) { cur().prev = cur().state; cur().state = st; }
+
+// ---- commands ----
+function runCommand(cmd) {
+  const c = cur();
+  c.toasts = [];
+  log('▶ Markdown Twain: ' + Twain.COMMANDS[cmd].title, 'n');
+  if (cmd === 'test') return runTest();
+  if (cmd === 'clearKey') {
+    const r = Twain.clearKey(c.state, world().env);
+    setState(r.state); r.changes.forEach(x => log(x, 'w'));
+    toast('info', r.note || 'API key cleared.' + (r.changes.length ? '' : ''));
+    return render();
+  }
+  if (cmd === 'remove' && !(c.state.settings[Twain.P + 'connections'] || []).length) { toast('info', 'No connections to remove.'); return render(); }
+  c.wiz = { cmd, answers: {} }; c.filter = '';
+  advance();
+}
+function advance() {
+  const c = cur(), w = world();
+  const step = Twain.currentStep(c.state, c.wiz, w.env);
+  if (!step.id) {
+    const r = Twain.finish(c.state, c.wiz, w.env);
+    c.wiz = null;
+    setState(r.state);
+    diffLog(c.prev, c.state); r.changes.forEach(x => log(x, 'w'));
+    if (r.runTest) return runTest();
+    toast('info', 'Saved. Run "Test Connection" to check it.', ['test']);
+  } else {
+    const v = Twain.stepView(c.state, c.wiz, w.env, w);
+    if (v.fetched && v.fetched.log) log(v.fetched.log);
+    c.filter = v.kind === 'input' ? (v.value || '') : '';
+  }
+  render();
+}
+function pickItem(id) {
+  const c = cur(); if (!c.wiz) return false;
+  const w = world(); const v = Twain.stepView(c.state, c.wiz, w.env, w);
+  if (v.kind !== 'pick' || !v.items.some(i => i.id === id)) return false;
+  c.wiz = Twain.answer(c.wiz, v.id, id); c.filter = '';
+  advance(); return true;
+}
+function acceptInput(text) {
+  const c = cur(); if (!c.wiz) return false;
+  const w = world(); const v = Twain.stepView(c.state, c.wiz, w.env, w);
+  if (v.kind === 'input') {
+    const val = (text !== undefined ? text : c.filter).trim();
+    if (!val) { toast('warn', 'A value is required.'); render(); return false; }
+    c.wiz = Twain.answer(c.wiz, v.id, val); c.filter = ''; advance(); return true;
+  }
+  const vis = visibleItems(v);
+  if (vis.length) return pickItem(vis[0].id);
+  return false;
+}
+function goBack() { const c = cur(); c.wiz = Twain.back(c.state, c.wiz, world().env); advance(); }
+function escape() { const c = cur(); if (c.wiz) { log('(cancelled, nothing saved)'); c.wiz = null; } render(); }
+function runTest() {
+  const c = cur(), w = world(), eff = Twain.effective(c.state, w.env);
+  if (eff.none) { toast('error', eff.missingName ? 'Active connection "' + eff.missingName + '" does not exist.' : 'No connection yet.', ['setup']); log('test: nothing to test', 'e'); return render(); }
+  const r = w.test(eff);
+  if (r.log) log(r.log);
+  if (r.ok) { toast('info', r.msg); log('test ok', 'n'); }
+  else { toast('error', r.msg, r.acts); log('test failed', 'e'); }
+  render();
+}
+function diffLog(a, b) {
+  const keys = new Set([...Object.keys(a.settings), ...Object.keys(b.settings)]);
+  keys.forEach(k => { if (JSON.stringify(a.settings[k]) !== JSON.stringify(b.settings[k])) log('settings: ' + k + ' = ' + JSON.stringify(b.settings[k]), 'w'); });
+}
+function visibleItems(v) {
+  const f = cur().filter.toLowerCase();
+  return v.items.filter(i => !i.sep && (!f || i.label.toLowerCase().includes(f) || (i.description || '').toLowerCase().includes(f)));
+}
+
+// ---- rendering ----
+function render() {
+  const c = cur(), w = world();
+  $('shapes').innerHTML = Object.entries(Twain.SHAPES).map(([id, s]) =>
+    `<button class="shape ${id === app.shape ? 'on' : ''}" data-shape="${id}"><b>${s.key} · ${s.name}</b><span>${s.blurb}</span></button>`).join('');
+
+  // quick pick
+  let qp = '';
+  if (c.wiz) {
+    const v = Twain.stepView(c.state, c.wiz, w.env, w);
+    const vis = v.kind === 'pick' ? visibleItems(v) : [];
+    const shown = v.kind === 'pick' ? v.items.filter(i => i.sep || vis.includes(i)) : [];
+    qp = `<div class="qp">
+      <div class="qp-head">${v.canBack ? '<button class="back" data-act="back" title="Back">←</button>' : ''}<span>${esc(v.title)}</span><span class="count">${v.index + 1}/${v.total}</span></div>
+      <div class="qp-input"><input id="qp-in" type="${v.password ? 'password' : 'text'}" placeholder="${esc(v.placeholder || '')}" value="${esc(c.filter)}" autocomplete="off"></div>
+      ${v.kind === 'input' ? `<div class="qp-msg">${esc(v.prompt)} Press Enter to confirm or Escape to cancel.</div>` : ''}
+      ${v.message ? `<div class="qp-msg ${v.error ? 'err' : ''}">${esc(v.message)}</div>` : ''}
+      <div class="qp-items">${shown.map((i, n) => i.sep
+        ? `<div class="qp-sep">${esc(i.label || '')}</div>`
+        : `<div class="qp-item ${n === shown.findIndex(x => !x.sep) ? 'active' : ''}" data-pick="${esc(i.id)}"><span class="check">${i.picked ? '✓' : ''}</span><span>${esc(i.label)} <span class="desc">${esc(i.description || '')}</span>${i.detail ? `<span class="detail">${esc(i.detail)}</span>` : ''}</span></div>`).join('')}</div>
+    </div>`;
+  }
+  $('qp').innerHTML = qp;
+  const inp = $('qp-in');
+  if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+
+  $('toasts').innerHTML = c.toasts.map((t, n) => `<div class="toast ${t.kind}"><button class="x" data-close="${n}">×</button>
+    <span class="ico">${t.kind === 'error' ? '⨯' : t.kind === 'warn' ? '!' : 'i'}</span>${esc(t.msg)}
+    ${t.acts.length ? `<div class="acts">${t.acts.map((a, k) => `<button class="${k ? 'sec' : ''}" data-cmd="${a}">${esc(Twain.COMMANDS[a].title.replace(/…$/, ''))}</button>`).join('')}</div>` : ''}</div>`).join('');
+
+  const eff = Twain.effective(c.state, w.env);
+  $('status').innerHTML = eff.none ? `<span class="item" data-cmd="setup">⚡ Set up translation</span>`
+    : `<span class="idea">idea: status bar item →</span><span class="item" data-cmd="${app.shape === 'connections' ? 'switchConn' : app.shape === 'perProvider' ? 'switch' : 'setup'}" title="Click to switch">⚡ ${esc(eff.label)}${eff.profile.model ? ' · ' + esc(eff.profile.model) : ''}</span>`;
+
+  $('commands').innerHTML = Object.entries(Twain.COMMANDS).filter(([, v]) => v.shapes.includes(app.shape))
+    .map(([id, v]) => `<button class="btn ${id === 'setup' ? 'primary' : ''}" data-cmd="${id}">${esc(v.title)}</button>`).join('')
+    + ` <button class="btn" data-act="escape">Esc (cancel picker)</button>`;
+
+  const f = c.flags;
+  $('world').innerHTML = `<div><b>Environment variables</b> visible to VS Code:<br>${Object.keys(ENV_VALUES).map(k => `<label><input type="checkbox" data-env="${k}" ${f.env[k] ? 'checked' : ''}><code>${k}</code></label>`).join('')}</div>
+    <div style="margin-top:6px"><label><input type="checkbox" data-flag="online" ${f.online ? 'checked' : ''}>Internet reachable</label>
+    <label><input type="checkbox" data-flag="localServer" ${f.localServer ? 'checked' : ''}>Local server running at <code>localhost:11434</code></label>
+    <label><input type="checkbox" data-flag="effortRejected" ${f.effortRejected ? 'checked' : ''}>Chosen model rejects reasoning effort (400)</label></div>
+    <div style="margin-top:6px;color:var(--muted);font-size:12.5px">Typed keys containing <code>bad</code> are rejected with 401. <code>GET /models</code> is public on OpenRouter, Ollama Cloud, and the local server, so it doesn't check the key there.</div>`;
+
+  // effective connection
+  if (eff.none) {
+    $('effective').innerHTML = eff.missingName ? `<span class="pill bad">activeConnection "${esc(eff.missingName)}" not found</span>` : `<span class="pill warn">Nothing configured yet</span>. Run <b>Set Up LLM Connection</b>.`;
+  } else {
+    const k = eff.key, pr = eff.profile;
+    const keyTxt = k.source === 'secret' ? `SecretStorage <code>${esc(k.id)}</code>` : k.source === 'env' ? `env <code>$${esc(k.id)}</code>` : (pr.provider === 'custom' ? 'none (sent without Authorization)' : 'none');
+    $('effective').innerHTML = `<dl class="kv">
+      <dt>Status</dt><dd>${eff.problems.length ? eff.problems.map(p => `<span class="pill bad">${esc(p)}</span>`).join(' ') : '<span class="pill ok">complete</span> (not necessarily working; see Test)'}</dd>
+      ${pr.name ? `<dt>Connection</dt><dd>${esc(pr.name)}</dd>` : ''}
+      <dt>Provider</dt><dd>${esc(Twain.presetOf(pr.provider).label)} <span style="color:var(--muted)">(effort style <code>${eff.style}</code>)</span></dd>
+      <dt>Base URL</dt><dd><code>${esc(eff.baseUrl || '—')}</code></dd>
+      <dt>API key from</dt><dd>${keyTxt}</dd>
+      <dt>Model</dt><dd><code>${esc(pr.model || '—')}</code></dd>
+      <dt>Reasoning effort</dt><dd><code>${esc(pr.effort)}</code></dd>
+      <dt>Test request</dt><dd><code>POST ${esc(eff.testRequest.url)}</code><pre class="json">${esc(JSON.stringify(eff.testRequest.body))}</pre></dd>
+    </dl>`;
+  }
+
+  // settings.json with highlights
+  const s = c.state.settings, ps = c.prev.settings;
+  const keys = Object.keys(s);
+  $('settings').innerHTML = keys.length ? '{\n' + keys.map((k, i) => {
+    const line = '  ' + JSON.stringify(k) + ': ' + JSON.stringify(s[k], null, 2).replace(/\n/g, '\n  ') + (i < keys.length - 1 ? ',' : '');
+    return JSON.stringify(s[k]) !== JSON.stringify(ps[k]) ? `<span class="chg">${esc(line)}</span>` : esc(line);
+  }).join('\n') + '\n}' : '{ }  <span style="color:var(--muted)">(only defaults)</span>';
+
+  const sec = c.state.secrets, psec = c.prev.secrets;
+  const mask = v => v.slice(0, 7) + '…' + v.slice(-4);
+  const removed = Object.keys(psec).filter(k => !(k in sec));
+  $('secrets').innerHTML = (Object.keys(sec).length ? Object.keys(sec).map(k => `<div class="secret-row ${sec[k] !== psec[k] ? 'chg' : ''}">${esc(k)} = ${esc(mask(sec[k]))}</div>`).join('') : '<span style="color:var(--muted)">empty</span>')
+    + removed.map(k => `<div class="secret-row chg" style="text-decoration:line-through">${esc(k)}</div>`).join('');
+
+  renderSettingsUI();
+  $('log').innerHTML = c.log.slice(-60).map(l => `<li class="${l.cls || ''}">${esc(l.text)}</li>`).join('');
+  $('log').scrollTop = 1e6;
+  renderWalk();
+}
+
+function renderSettingsUI() {
+  const s = cur().state.settings, P = Twain.P;
+  const opts = (vals, v) => vals.map(x => `<option value="${x}" ${x === v ? 'selected' : ''}>${x}</option>`).join('');
+  const providerIds = [...Twain.PRESETS.map(p => p.id), 'custom'];
+  const keyLink = `<a data-cmd="key">Set API Key…</a> · <a data-cmd="setup">Set Up LLM Connection…</a>`;
+  let rows = [];
+  if (app.shape === 'single') {
+    rows = [
+      ['Provider', 'Which provider translates. ' + keyLink, `<select data-set="provider">${opts(providerIds, s[P + 'provider'] || 'openai')}</select>`],
+      ['Custom Base URL', 'Used when Provider is custom.', `<input data-set="customBaseUrl" value="${esc(s[P + 'customBaseUrl'] || '')}">`],
+      ['Custom Api Key Env', 'Env var holding the custom key.', `<input data-set="customApiKeyEnv" value="${esc(s[P + 'customApiKeyEnv'] || '')}">`],
+      ['Model', 'Model ID. <a data-cmd="model">Pick from the provider\'s list…</a>', `<input data-set="model" value="${esc(s[P + 'model'] || '')}">`],
+      ['Reasoning Effort', '', `<select data-set="reasoningEffort">${opts(Twain.EFFORTS.map(e => e.id), s[P + 'reasoningEffort'] || 'default')}</select>`],
+    ];
+  } else if (app.shape === 'perProvider') {
+    rows = [
+      ['Provider', 'Which provider translates. ' + keyLink, `<select data-set="provider">${opts(providerIds, s[P + 'provider'] || 'openai')}</select>`],
+      ['Providers', 'Model, effort (and base URL for custom), per provider.', `<a data-json="1">Edit in settings.json</a> <span style="color:var(--muted)">(nested objects can't be edited in the Settings UI)</span>`],
+    ];
+  } else {
+    rows = [
+      ['Active Connection', 'Name of the connection to use. <a data-cmd="switchConn">Switch…</a>', `<input data-set="activeConnection" value="${esc(s[P + 'activeConnection'] || '')}">`],
+      ['Connections', 'Your saved connections. ' + keyLink, `<a data-json="1">Edit in settings.json</a> <span style="color:var(--muted)">(arrays of objects can't be edited in the Settings UI)</span>`],
+    ];
+  }
+  $('sui').innerHTML = rows.map(([n, d, ctl]) => `<div class="sui-row"><div class="name"><b>${n}</b><span>${d}</span></div><div>${ctl}</div></div>`).join('');
+}
+
+// ---- walkthroughs ----
+// Each step: [label, fn]. Steps are generated per shape, since the flows differ.
+const pick = id => () => pickItem(id) || log('(walkthrough step does not apply in this shape)', 'e');
+const type = t => () => { cur().filter = t; acceptInput(t); };
+const accept = () => acceptInput();
+const cmd = id => () => runCommand(id);
+const flag = (k, v) => () => { cur().flags[k] = v; log('world: ' + k + ' = ' + v); render(); };
+const envv = (k, v) => () => { cur().flags.env[k] = v; log('world: $' + k + (v ? ' set' : ' unset')); render(); };
+const setting = (k, v) => () => { const c = cur(); const st = JSON.parse(JSON.stringify(c.state)); st.settings[Twain.P + k] = v; setState(st); diffLog(c.prev, c.state); log('(edited in the Settings UI)', 'w'); render(); };
+
+function openaiSetupSteps(shape, key, model, effort) {
+  const s = [['Run "Set Up LLM Connection"', cmd('setup')]];
+  if (shape === 'connections' && (cur().state.settings[Twain.P + 'connections'] || []).length) s.push(['Pick "New connection…"', pick('__new')]);
+  s.push(['Pick OpenAI', pick('openai')], ['Pick "Enter an API key…"', pick('enter')], ['Paste ' + key, type(key)],
+         ['Pick ' + model, pick(model)], ['Pick effort ' + effort, pick(effort)]);
+  if (shape === 'connections') s.push(['Accept the suggested name', accept]);
+  return s;
+}
+// seeds a shape with a working OpenAI connection, through the real flow
+function seedOpenAI() {
+  const c = cur();
+  runCommand('setup'); pickItem('openai'); pickItem('enter'); acceptInput('sk-proj-demo1234'); pickItem('gpt-5-mini'); pickItem('low');
+  if (app.shape === 'connections') acceptInput();
+  c.log = [{ text: '(seeded: OpenAI · gpt-5-mini · effort low, key saved)', cls: 'n' }]; c.toasts = []; c.prev = c.state;
+}
+
+const WALKS = [
+  { name: 'First setup', desc: 'A first-time user with nothing configured sets up OpenAI by pasting a key.',
+    watch: 'What lands in settings.json vs SecretStorage. How many steps it takes. Whether the effort step feels like one step too many for "pick one and done". Does the long OpenAI model list (with embeddings, tts, …) bother you?',
+    steps: sh => openaiSetupSteps(sh, 'sk-proj-demo1234', 'gpt-5-mini', 'default') },
+  { name: 'Key from env var', desc: 'OPENROUTER_API_KEY is already exported in the shell VS Code was started from.',
+    watch: 'The key step offers "Use $OPENROUTER_API_KEY", and nothing is written to SecretStorage. The effort step shows the OpenRouter body shape.',
+    steps: sh => [['Export OPENROUTER_API_KEY', envv('OPENROUTER_API_KEY', true)], ['Run "Set Up LLM Connection"', cmd('setup')],
+      ['Pick OpenRouter', pick('openrouter')], ['Pick "Use $OPENROUTER_API_KEY"', pick('env')], ['Pick anthropic/claude-haiku-4.5', pick('anthropic/claude-haiku-4.5')],
+      ['Pick effort minimal', pick('minimal')], ...(sh === 'connections' ? [['Accept the suggested name', accept]] : [])] },
+  { name: 'Switch away and back', desc: 'OpenAI is set up (gpt-5-mini, effort low). You try DeepSeek for a while, then go back to OpenAI.',
+    watch: 'The key difference between the shapes. A: going back means picking the model again, and DeepSeek\'s "high" effort carries over to OpenAI. B: going back is one pick. C: one pick, but each provider is a named thing you manage.',
+    seed: seedOpenAI,
+    steps: sh => {
+      const s = [];
+      if (sh === 'single') s.push(['Run "Set Up LLM Connection"', cmd('setup')], ['Pick DeepSeek', pick('deepseek')]);
+      if (sh === 'perProvider') s.push(['Run "Switch Provider"', cmd('switch')], ['Pick DeepSeek', pick('deepseek')]);
+      if (sh === 'connections') s.push(['Run "Set Up LLM Connection"', cmd('setup')], ['Pick "New connection…"', pick('__new')], ['Pick DeepSeek', pick('deepseek')]);
+      s.push(['Pick "Enter an API key…"', pick('enter')], ['Paste sk-ds-demo5678', type('sk-ds-demo5678')], ['Pick deepseek-reasoner', pick('deepseek-reasoner')], ['Pick effort high', pick('high')]);
+      if (sh === 'connections') s.push(['Accept the suggested name', accept]);
+      if (sh === 'single') s.push(['Back: Run "Set Up LLM Connection"', cmd('setup')], ['Pick OpenAI', pick('openai')], ['Pick "Keep the saved key"', pick('keep')], ['Pick gpt-5-mini (again)', pick('gpt-5-mini')], ['Pick effort (note: current is high)', pick('low')]);
+      if (sh === 'perProvider') s.push(['Back: Run "Switch Provider"', cmd('switch')], ['Pick OpenAI (remembered)', pick('openai')]);
+      if (sh === 'connections') s.push(['Back: Run "Switch Connection"', cmd('switchConn')], ['Pick OpenAI', pick('OpenAI')]);
+      return s;
+    } },
+  { name: 'Two custom endpoints', desc: 'A local Ollama for quick drafts, then SiliconFlow (a custom provider that needs a key) for real work.',
+    watch: 'A and B have exactly one Custom slot, so SiliconFlow replaces the local server (and the "Keep the saved key" option is gone because the local server had none). Only C keeps both. Is that a real need for you, or YAGNI?',
+    steps: sh => {
+      const s = [['Start the local server', flag('localServer', true)], ['Run "Set Up LLM Connection"', cmd('setup')], ['Pick Custom…', pick('custom')],
+        ['Type http://localhost:11434/v1', type('http://localhost:11434/v1')], ['Pick "No key"', pick('none')], ['Pick qwen3:8b', pick('qwen3:8b')], ['Pick effort default', pick('default')]];
+      if (sh === 'connections') s.push(['Name it "Local Ollama"', type('Local Ollama')]);
+      s.push(['Run "Set Up LLM Connection" again', cmd('setup')]);
+      if (sh === 'connections') s.push(['Pick "New connection…"', pick('__new')]);
+      s.push(['Pick Custom…', pick('custom')], ['Replace URL with https://api.siliconflow.cn/v1', type('https://api.siliconflow.cn/v1')],
+        ['Pick "Enter an API key…"', pick('enter')], ['Paste sk-sf-demo2468', type('sk-sf-demo2468')], ['Pick Qwen/Qwen3-8B', pick('Qwen/Qwen3-8B')], ['Pick effort default', pick('default')]);
+      if (sh === 'connections') s.push(['Name it "SiliconFlow"', type('SiliconFlow')]);
+      return s;
+    } },
+  { name: 'Wrong key, rejected effort', desc: 'OpenRouter with a mistyped key and an effort the model refuses.',
+    watch: 'The model list still loads with a bad key (OpenRouter\'s /models is public), so the bad key only shows up in the automatic test. Then the 400 comes with a "try `default`" hint, and the error toast offers the right command.',
+    steps: sh => [['Model rejects effort', flag('effortRejected', true)], ['Run "Set Up LLM Connection"', cmd('setup')], ['Pick OpenRouter', pick('openrouter')],
+      ['Pick "Enter an API key…"', pick('enter')], ['Paste sk-or-bad-0000', type('sk-or-bad-0000')], ['Pick openai/gpt-5-mini', pick('openai/gpt-5-mini')], ['Pick effort high', pick('high')],
+      ...(sh === 'connections' ? [['Accept the suggested name', accept]] : []),
+      ['Toast: click "Set API Key" (or run it)', cmd('key')], ['Pick "Replace it with a new key…"', pick('enter')], ['Paste sk-or-good-1357', type('sk-or-good-1357')],
+      ['Toast: run "Set Reasoning Effort"', cmd('effort')], ['Pick default', pick('default')], ['Run "Test Connection"', cmd('test')]] },
+  { name: 'Edited in Settings UI', desc: 'OpenAI is set up. Then the user changes things directly in the native Settings UI instead of using the commands.',
+    watch: 'A: provider → DeepSeek leaves the model at gpt-5-mini, so the test gets a 404, and DeepSeek has no key yet. B: DeepSeek\'s slot is empty, so "No model". C: a typo in activeConnection points at nothing. Which failure feels acceptable?',
+    seed: seedOpenAI,
+    steps: sh => sh === 'connections'
+      ? [['Type "OpenAi" into Active Connection', setting('activeConnection', 'OpenAi')], ['Run "Test Connection"', cmd('test')]]
+      : [['Export DEEPSEEK_API_KEY', envv('DEEPSEEK_API_KEY', true)], ['Change Provider to deepseek in the Settings UI', setting('provider', 'deepseek')], ['Run "Test Connection"', cmd('test')]] },
+];
+
+function startWalk(i) {
+  app.per[app.shape] = fresh(app.shape);
+  cur().walk = i;
+  if (WALKS[i].seed) WALKS[i].seed();
+  render();
+}
+function renderWalk() {
+  const c = cur(), wk = WALKS[c.walk], steps = wk.steps(app.shape);
+  $('walk-tabs').innerHTML = WALKS.map((w, i) => `<button class="tab ${i === c.walk ? 'on' : ''}" data-walk="${i}">${esc(w.name)}</button>`).join('');
+  $('walk').innerHTML = `<div>${esc(wk.desc)}</div>
+    <div class="steps">${steps.map((s, i) => `<button class="step ${i < c.walkDone ? 'done' : i === c.walkDone ? 'next' : ''}" data-step="${i}" ${i === c.walkDone ? '' : 'disabled'}>${i + 1}. ${esc(s[0])}</button>`).join('')}
+    ${c.walkDone >= steps.length ? '<div style="color:var(--ok);font-weight:600">Done. Look at the panels on the right.</div>' : ''}</div>
+    <div class="watch"><b>Watch for:</b> ${esc(wk.watch)}</div>
+    <div style="margin-top:8px"><button class="btn" data-walk="${c.walk}">Restart this walkthrough</button></div>`;
+}
+function runStep(i) {
+  const c = cur(), steps = WALKS[c.walk].steps(app.shape);
+  if (i !== c.walkDone) return;
+  c.walkDone++;
+  steps[i][1]();
+  render();
+}
+
+// ---- events ----
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-shape],[data-cmd],[data-pick],[data-act],[data-close],[data-walk],[data-step],[data-json]');
+  if (!t) return;
+  if (t.dataset.shape) { app.shape = t.dataset.shape; render(); }
+  else if (t.dataset.cmd) runCommand(t.dataset.cmd);
+  else if (t.dataset.pick !== undefined) pickItem(t.dataset.pick);
+  else if (t.dataset.act === 'back') goBack();
+  else if (t.dataset.act === 'escape') escape();
+  else if (t.dataset.close !== undefined) { cur().toasts.splice(+t.dataset.close, 1); render(); }
+  else if (t.dataset.walk !== undefined) startWalk(+t.dataset.walk);
+  else if (t.dataset.step !== undefined) runStep(+t.dataset.step);
+  else if (t.dataset.json) { log('(would open settings.json)'); render(); }
+});
+document.addEventListener('change', e => {
+  const t = e.target, c = cur();
+  if (t.dataset.env) { c.flags.env[t.dataset.env] = t.checked; log('world: $' + t.dataset.env + (t.checked ? ' set' : ' unset')); render(); }
+  else if (t.dataset.flag) { c.flags[t.dataset.flag] = t.checked; log('world: ' + t.dataset.flag + ' = ' + t.checked); render(); }
+  else if (t.dataset.set) { setting(t.dataset.set, t.value)(); }
+});
+document.addEventListener('input', e => {
+  if (e.target.id !== 'qp-in') return;
+  cur().filter = e.target.value;
+  const w = world(), c = cur(), v = Twain.stepView(c.state, c.wiz, w.env, w);
+  if (v.kind === 'pick') { const pos = e.target.selectionStart; render(); const i = $('qp-in'); if (i) i.setSelectionRange(pos, pos); }
+});
+document.addEventListener('keydown', e => {
+  if (e.target.id !== 'qp-in') return;
+  if (e.key === 'Enter') { e.preventDefault(); acceptInput(); }
+  if (e.key === 'Escape') { e.preventDefault(); escape(); }
+});
+
+startWalk(0);
+</script>
+</body>
+</html>
