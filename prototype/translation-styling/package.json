@@ -1,0 +1,49 @@
+{
+  "name": "markdown-twain-translation-styling-prototype",
+  "displayName": "PROTOTYPE: markdown-twain translation styling (throwaway)",
+  "description": "Throwaway prototype for 'Prototype translation styling in the preview'. Hand-written translations, no LLM. Delete me.",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "prototype",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "markdown.markdownItPlugins": true,
+    "markdown.previewStyles": [
+      "./preview.css"
+    ],
+    "markdown.previewScripts": [
+      "./preview.js"
+    ],
+    "commands": [
+      {
+        "command": "twainProto.pickMode",
+        "title": "Twain Proto: Pick Display Mode",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "twainProto.cycleTheme",
+        "title": "Twain Proto: Cycle Light / Dark / High Contrast Theme",
+        "icon": "$(color-mode)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "twainProto.pickMode",
+          "when": "activeWebviewPanelId == 'markdown.preview' || activeCustomEditorId == 'vscode.markdown.preview.editor'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "twainProto.cycleTheme",
+          "when": "activeWebviewPanelId == 'markdown.preview' || activeCustomEditorId == 'vscode.markdown.preview.editor'",
+          "group": "navigation@2"
+        }
+      ]
+    }
+  }
+}

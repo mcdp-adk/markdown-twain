@@ -1,0 +1,95 @@
+/* PROTOTYPE — throwaway. Four bilingual styling variants over the one fixed markup:
+ *   <p>src</p><div class="twain-t">tr</div>          (paragraphs, headings, loose list items, blockquotes)
+ *   <li>src<span class="twain-t">tr</span></li>     (tight list items)
+ *   <td>src<span class="twain-t">tr</span></td>     (table cells)
+ * translationOnly has no hook: it is plain inline replacement.
+ * Each variant is scoped by html[data-twain-variant], switched by preview.js. */
+
+body { --twain-rule: rgba(0, 0, 0, 0.18); --twain-rf-green: oklch(0.693 0.17 162.48); }
+body.vscode-dark { --twain-rule: rgba(255, 255, 255, 0.18); }
+body.vscode-high-contrast { --twain-rule: var(--vscode-contrastBorder, currentColor); }
+
+/* ---------------------------------------------------------------------------------------------
+ * A. Read Frog port. `textColor` verbatim (same green in every theme), and spacing as if the
+ * translation sat inside its source element the way Read Frog inserts it: 8px below the source,
+ * same typography (heading-sized under headings), the heading rule under the pair.
+ * ------------------------------------------------------------------------------------------- */
+[data-twain-variant="A"] .twain-t { color: var(--twain-rf-green) !important; }
+[data-twain-variant="A"] span.twain-t { display: block; margin: 8px 0; }
+[data-twain-variant="A"] p:has(+ div.twain-t) { margin-bottom: 8px; }
+[data-twain-variant="A"] p + div.twain-t { margin-bottom: 16px; }
+[data-twain-variant="A"] li > p + div.twain-t { margin-bottom: 0.7em; }
+[data-twain-variant="A"] :is(h1, h2, h3, h4, h5, h6):has(+ div.twain-t) { margin-bottom: 8px; padding-bottom: 0; border-bottom: none; }
+[data-twain-variant="A"] :is(h1, h2, h3, h4, h5, h6) + div.twain-t { font-weight: 600; line-height: 1.25; margin-bottom: 16px; }
+[data-twain-variant="A"] h1 + div.twain-t { font-size: 2em; padding-bottom: 0.3em; border-bottom: 1px solid var(--twain-rule); }
+[data-twain-variant="A"] h2 + div.twain-t { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--twain-rule); }
+[data-twain-variant="A"] h3 + div.twain-t { font-size: 1.25em; }
+[data-twain-variant="A"] h5 + div.twain-t { font-size: 0.875em; }
+[data-twain-variant="A"] h6 + div.twain-t { font-size: 0.85em; }
+
+/* ---------------------------------------------------------------------------------------------
+ * B. Theme-tuned pair. Read Frog's hue, but lightness tuned per theme for contrast (a darker
+ * green on light themes, plain text colour on high contrast). Source and translation are pulled
+ * tight together (0.15em) so each pair reads as one unit, with the normal gap after the pair.
+ * Headings: same size as the source, the rule under the pair.
+ * ------------------------------------------------------------------------------------------- */
+[data-twain-variant="B"] .twain-t { color: oklch(0.5 0.12 162.48); }
+[data-twain-variant="B"] body.vscode-dark .twain-t { color: var(--twain-rf-green); }
+[data-twain-variant="B"] body.vscode-high-contrast .twain-t { color: inherit; text-decoration: underline dashed; text-underline-offset: 4px; }
+[data-twain-variant="B"] span.twain-t { display: block; margin-top: 0.15em; }
+[data-twain-variant="B"] p:has(+ div.twain-t) { margin-bottom: 0.15em; }
+[data-twain-variant="B"] p + div.twain-t { margin-bottom: 16px; }
+[data-twain-variant="B"] li > p + div.twain-t { margin-bottom: 0.7em; }
+[data-twain-variant="B"] :is(h1, h2, h3, h4, h5, h6):has(+ div.twain-t) { margin-bottom: 0.15em; padding-bottom: 0; border-bottom: none; }
+[data-twain-variant="B"] :is(h1, h2, h3, h4, h5, h6) + div.twain-t { font-weight: 600; line-height: 1.25; margin-bottom: 16px; }
+[data-twain-variant="B"] h1 + div.twain-t { font-size: 2em; padding-bottom: 0.3em; border-bottom: 1px solid var(--twain-rule); }
+[data-twain-variant="B"] h2 + div.twain-t { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--twain-rule); }
+[data-twain-variant="B"] h3 + div.twain-t { font-size: 1.25em; }
+[data-twain-variant="B"] h5 + div.twain-t { font-size: 0.875em; }
+[data-twain-variant="B"] h6 + div.twain-t { font-size: 0.85em; }
+
+/* ---------------------------------------------------------------------------------------------
+ * C. Annotation. No hue at all: the translation is the text colour faded to ~60% and a
+ * notch smaller, like a gloss under the source. Headings keep their own rule; their translation
+ * is a body-sized subtitle below it, not a second heading.
+ * ------------------------------------------------------------------------------------------- */
+[data-twain-variant="C"] .twain-t { color: color-mix(in srgb, currentColor 62%, transparent); font-size: 0.93em; }
+[data-twain-variant="C"] span.twain-t { display: block; margin-top: 0.1em; }
+[data-twain-variant="C"] td > span.twain-t, [data-twain-variant="C"] th > span.twain-t { font-weight: normal; }
+[data-twain-variant="C"] p:has(+ div.twain-t) { margin-bottom: 0.2em; }
+[data-twain-variant="C"] p + div.twain-t { margin-bottom: 16px; }
+[data-twain-variant="C"] li > p + div.twain-t { margin-bottom: 0.7em; }
+[data-twain-variant="C"] :is(h1, h2, h3, h4, h5, h6):has(+ div.twain-t) { margin-bottom: 6px; }
+[data-twain-variant="C"] :is(h1, h2, h3, h4, h5, h6) + div.twain-t { font-size: 1em; font-weight: 600; margin-bottom: 16px; }
+[data-twain-variant="C"] h1 + div.twain-t { font-size: 1.15em; }
+
+/* ---------------------------------------------------------------------------------------------
+ * D. Left rule. The translation keeps the normal text colour (links and code look exactly as in
+ * the source) and is marked only by a thin accent bar on its left. Headings: a lighter-weight
+ * line at the heading's size, the rule stays on the source heading.
+ * ------------------------------------------------------------------------------------------- */
+[data-twain-variant="D"] .twain-t { border-left: 2px solid var(--vscode-textLink-foreground, #3794ff); padding-left: 0.6em; }
+[data-twain-variant="D"] span.twain-t { display: block; margin: 0.2em 0 0.1em; }
+[data-twain-variant="D"] p:has(+ div.twain-t) { margin-bottom: 0.3em; }
+[data-twain-variant="D"] p + div.twain-t { margin-bottom: 16px; }
+[data-twain-variant="D"] li > p + div.twain-t { margin-bottom: 0.7em; }
+[data-twain-variant="D"] :is(h1, h2, h3, h4, h5, h6):has(+ div.twain-t) { margin-bottom: 8px; }
+[data-twain-variant="D"] :is(h1, h2, h3, h4, h5, h6) + div.twain-t { font-weight: 400; line-height: 1.25; margin-bottom: 16px; }
+[data-twain-variant="D"] h1 + div.twain-t { font-size: 1.6em; }
+[data-twain-variant="D"] h2 + div.twain-t { font-size: 1.3em; }
+[data-twain-variant="D"] h3 + div.twain-t { font-size: 1.15em; }
+
+/* --- prototype chrome -------------------------------------------------------------------- */
+#twain-proto-bar {
+  position: fixed; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 9999;
+  display: flex; align-items: center; gap: 4px; padding: 3px 4px;
+  font: 12px/1.4 system-ui, sans-serif; white-space: nowrap;
+  background: #111; color: #fff; border: 1px solid #f59e0b; border-radius: 999px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+#twain-proto-bar button {
+  all: unset; cursor: pointer; padding: 1px 9px; border-radius: 999px; font-weight: 700;
+}
+#twain-proto-bar button:hover { background: #333; }
+#twain-proto-bar .label { padding: 0 6px; }
+#twain-proto-bar .meta { opacity: 0.6; padding-right: 8px; }
