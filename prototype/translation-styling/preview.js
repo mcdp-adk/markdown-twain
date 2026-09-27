@@ -30,7 +30,7 @@
     document.documentElement.dataset.twainVariant = k;
     bar.querySelector('.label').textContent = `${k} · ${name}`;
     const mode = document.getElementById('twain-proto')?.dataset.mode ?? '?';
-    bar.querySelector('.meta').textContent = `PROTOTYPE · ${mode} · ${theme()}`;
+    bar.querySelector('.meta').textContent = `PROTOTYPE · ${mode} · ${theme()} · clicks ${downs}`;
   }
 
   function step(d) {
@@ -39,7 +39,13 @@
     show();
   }
 
-  bar.addEventListener('click', (e) => { const d = e.target.dataset?.d; if (d) step(Number(d)); });
+  let downs = 0;
+  document.addEventListener('pointerdown', (e) => {
+    downs++;
+    const b = e.target.closest?.('#twain-proto-bar button');
+    if (b) { e.preventDefault(); e.stopPropagation(); step(Number(b.dataset.d)); }
+    show();
+  }, true);
   window.addEventListener('keydown', (e) => {
     if (e.target.closest?.('input, textarea, [contenteditable]')) return;
     if (e.key === 'ArrowLeft') step(-1);
