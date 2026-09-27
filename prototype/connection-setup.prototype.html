@@ -365,7 +365,9 @@ const Twain = (() => {
     const full = withProvider => {
       if (withProvider) seq.push('provider');
       if (draft(state, w).provider === 'custom') seq.push('baseUrl');
-      keySteps(); modelSteps(); seq.push('effort');
+      keySteps(); modelSteps();
+      // A: the effort step only appears when effort is not `default` (decided on #10)
+      if (state.shape !== 'single' || 'effort' in a || draft(state, w).effort !== 'default') seq.push('effort');
     };
     switch (w.cmd) {
       case 'setup':
@@ -471,7 +473,10 @@ const Twain = (() => {
         const style = presetOf(pr.provider).effortStyle;
         const items = EFFORTS.map(e => ({ id: e.id, label: e.id, description: (e.id === pr.effort ? 'current · ' : '') + e.detail, picked: e.id === pr.effort,
           detail: e.id === 'default' ? '' : 'sends ' + JSON.stringify(effortFields(style, e.id)) }));
-        return Object.assign(base, { kind: 'pick', placeholder: 'Reasoning effort' + (state.shape === 'single' ? ' (applies to every provider)' : ' for this ' + (state.shape === 'connections' ? 'connection' : 'provider')), items });
+        const ph = state.shape === 'single' && w.cmd === 'setup'
+          ? 'Reasoning effort is `' + pr.effort + '` (applies to every provider). Enter keeps it.'
+          : 'Reasoning effort' + (state.shape === 'single' ? ' (applies to every provider)' : ' for this ' + (state.shape === 'connections' ? 'connection' : 'provider'));
+        return Object.assign(base, { kind: 'pick', placeholder: ph, items: state.shape === 'single' && w.cmd === 'setup' ? [...items.filter(i => i.picked), ...items.filter(i => !i.picked)] : items });
       }
       case 'name': {
         const suggested = pr.provider === 'custom' ? (hostOf(pr.baseUrl) || 'Custom') : presetOf(pr.provider).label;
@@ -788,29 +793,34 @@ function openaiSetupSteps(shape, key, model, effort) {
   const s = [['Run "Set Up LLM Connection"', cmd('setup')]];
   if (shape === 'connections' && (cur().state.settings[Twain.P + 'connections'] || []).length) s.push(['Pick "New connection…"', pick('__new')]);
   s.push(['Pick OpenAI', pick('openai')], ['Pick "Enter an API key…"', pick('enter')], ['Paste ' + key, type(key)],
-         ['Pick ' + model, pick(model)], ['Pick effort ' + effort, pick(effort)]);
+         ['Pick ' + model, pick(model)], ...inFlowEffort(shape, effort));
   if (shape === 'connections') s.push(['Accept the suggested name', accept]);
   return s;
 }
+// A skips the effort step while effort is `default`; B and C always ask
+const inFlowEffort = (sh, e) => sh === 'single' ? [] : [['Pick effort ' + e, pick(e)]];
+const laterEffort = (sh, e) => sh === 'single' && e !== 'default' ? [['Run "Set Reasoning Effort"', cmd('effort')], ['Pick ' + e, pick(e)]] : [];
 // seeds a shape with a working OpenAI connection, through the real flow
 function seedOpenAI() {
   const c = cur();
-  runCommand('setup'); pickItem('openai'); pickItem('enter'); acceptInput('sk-proj-demo1234'); pickItem('gpt-5-mini'); pickItem('low');
+  runCommand('setup'); pickItem('openai'); pickItem('enter'); acceptInput('sk-proj-demo1234'); pickItem('gpt-5-mini');
+  if (app.shape === 'single') runCommand('effort');
+  pickItem('low');
   if (app.shape === 'connections') acceptInput();
   c.log = [{ text: '(seeded: OpenAI · gpt-5-mini · effort low, key saved)', cls: 'n' }]; c.toasts = []; c.prev = c.state;
 }
 
 const WALKS = [
   { name: 'First setup', desc: 'A first-time user with nothing configured sets up OpenAI by pasting a key.',
-    watch: 'What lands in settings.json vs SecretStorage. How many steps it takes. Whether the effort step feels like one step too many for "pick one and done". Does the long OpenAI model list (with embeddings, tts, …) bother you?',
+    watch: 'What lands in settings.json vs SecretStorage. How many steps it takes. In A there is no effort step while effort is `default`; B and C always ask. Does the long OpenAI model list (with embeddings, tts, …) bother you?',
     steps: sh => openaiSetupSteps(sh, 'sk-proj-demo1234', 'gpt-5-mini', 'default') },
   { name: 'Key from env var', desc: 'OPENROUTER_API_KEY is already exported in the shell VS Code was started from.',
     watch: 'The key step offers "Use $OPENROUTER_API_KEY", and nothing is written to SecretStorage. The effort step shows the OpenRouter body shape.',
     steps: sh => [['Export OPENROUTER_API_KEY', envv('OPENROUTER_API_KEY', true)], ['Run "Set Up LLM Connection"', cmd('setup')],
       ['Pick OpenRouter', pick('openrouter')], ['Pick "Use $OPENROUTER_API_KEY"', pick('env')], ['Pick anthropic/claude-haiku-4.5', pick('anthropic/claude-haiku-4.5')],
-      ['Pick effort minimal', pick('minimal')], ...(sh === 'connections' ? [['Accept the suggested name', accept]] : [])] },
+      ...inFlowEffort(sh, 'minimal'), ...(sh === 'connections' ? [['Accept the suggested name', accept]] : []), ...laterEffort(sh, 'minimal')] },
   { name: 'Switch away and back', desc: 'OpenAI is set up (gpt-5-mini, effort low). You try DeepSeek for a while, then go back to OpenAI.',
-    watch: 'The key difference between the shapes. A: going back means picking the model again, and DeepSeek\'s "high" effort carries over to OpenAI. B: going back is one pick. C: one pick, but each provider is a named thing you manage.',
+    watch: 'The key difference between the shapes. A: effort is `low`, so setup shows the effort step with it preselected; going back means picking the model again, and DeepSeek\'s "high" effort carries over to OpenAI. B: going back is one pick. C: one pick, but each provider is a named thing you manage.',
     seed: seedOpenAI,
     steps: sh => {
       const s = [];
@@ -828,18 +838,23 @@ const WALKS = [
     watch: 'A and B have exactly one Custom slot, so SiliconFlow replaces the local server (and the "Keep the saved key" option is gone because the local server had none). Only C keeps both. Is that a real need for you, or YAGNI?',
     steps: sh => {
       const s = [['Start the local server', flag('localServer', true)], ['Run "Set Up LLM Connection"', cmd('setup')], ['Pick Custom…', pick('custom')],
-        ['Type http://localhost:11434/v1', type('http://localhost:11434/v1')], ['Pick "No key"', pick('none')], ['Pick qwen3:8b', pick('qwen3:8b')], ['Pick effort default', pick('default')]];
+        ['Type http://localhost:11434/v1', type('http://localhost:11434/v1')], ['Pick "No key"', pick('none')], ['Pick qwen3:8b', pick('qwen3:8b')], ...inFlowEffort(sh, 'default')];
       if (sh === 'connections') s.push(['Name it "Local Ollama"', type('Local Ollama')]);
       s.push(['Run "Set Up LLM Connection" again', cmd('setup')]);
       if (sh === 'connections') s.push(['Pick "New connection…"', pick('__new')]);
       s.push(['Pick Custom…', pick('custom')], ['Replace URL with https://api.siliconflow.cn/v1', type('https://api.siliconflow.cn/v1')],
-        ['Pick "Enter an API key…"', pick('enter')], ['Paste sk-sf-demo2468', type('sk-sf-demo2468')], ['Pick Qwen/Qwen3-8B', pick('Qwen/Qwen3-8B')], ['Pick effort default', pick('default')]);
+        ['Pick "Enter an API key…"', pick('enter')], ['Paste sk-sf-demo2468', type('sk-sf-demo2468')], ['Pick Qwen/Qwen3-8B', pick('Qwen/Qwen3-8B')], ...inFlowEffort(sh, 'default'));
       if (sh === 'connections') s.push(['Name it "SiliconFlow"', type('SiliconFlow')]);
       return s;
     } },
   { name: 'Wrong key, rejected effort', desc: 'OpenRouter with a mistyped key and an effort the model refuses.',
     watch: 'The model list still loads with a bad key (OpenRouter\'s /models is public), so the bad key only shows up in the automatic test. Then the 400 comes with a "try `default`" hint, and the error toast offers the right command.',
-    steps: sh => [['Model rejects effort', flag('effortRejected', true)], ['Run "Set Up LLM Connection"', cmd('setup')], ['Pick OpenRouter', pick('openrouter')],
+    steps: sh => sh === 'single' ? [['Model rejects effort', flag('effortRejected', true)], ['Run "Set Up LLM Connection"', cmd('setup')], ['Pick OpenRouter', pick('openrouter')],
+      ['Pick "Enter an API key…"', pick('enter')], ['Paste sk-or-bad-0000', type('sk-or-bad-0000')], ['Pick openai/gpt-5-mini', pick('openai/gpt-5-mini')],
+      ['Toast: click "Set API Key" (or run it)', cmd('key')], ['Pick "Replace it with a new key…"', pick('enter')], ['Paste sk-or-good-1357', type('sk-or-good-1357')],
+      ['Run "Set Reasoning Effort"', cmd('effort')], ['Pick high', pick('high')], ['Run "Test Connection"', cmd('test')],
+      ['Toast: run "Set Reasoning Effort"', cmd('effort')], ['Pick default', pick('default')], ['Run "Test Connection"', cmd('test')]]
+    : [['Model rejects effort', flag('effortRejected', true)], ['Run "Set Up LLM Connection"', cmd('setup')], ['Pick OpenRouter', pick('openrouter')],
       ['Pick "Enter an API key…"', pick('enter')], ['Paste sk-or-bad-0000', type('sk-or-bad-0000')], ['Pick openai/gpt-5-mini', pick('openai/gpt-5-mini')], ['Pick effort high', pick('high')],
       ...(sh === 'connections' ? [['Accept the suggested name', accept]] : []),
       ['Toast: click "Set API Key" (or run it)', cmd('key')], ['Pick "Replace it with a new key…"', pick('enter')], ['Paste sk-or-good-1357', type('sk-or-good-1357')],
