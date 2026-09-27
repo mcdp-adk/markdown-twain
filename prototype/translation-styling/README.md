@@ -34,3 +34,8 @@ Any other Markdown file works too; blocks without a hand-written translation sho
 | B | Theme-tuned pair | Same hue, darker on light themes; HC: text colour + dashed underline | Tight (0.15em) pair, normal gap after it; heading translation at heading size, rule under the pair |
 | C | Annotation | Text colour faded to ~60%, 0.93em | Tight gloss; heading translation is a body-sized subtitle below the heading's rule |
 | D | Left rule | Normal text colour | Thin link-coloured bar on the left; heading translation lighter weight, slightly smaller |
+
+## Verdict
+
+**B (Theme-tuned pair)** was chosen; see the resolution on
+[Prototype translation styling in the preview](https://github.com/mcdp-adk/markdown-twain/issues/11).
