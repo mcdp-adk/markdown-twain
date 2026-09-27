@@ -12,10 +12,10 @@ const DEFAULT_THEME = "Default Dark Modern";
 const root = resolve(import.meta.dirname, "..");
 const theme = process.argv[2] || DEFAULT_THEME;
 
-// A fresh profile each run, so SecretStorage starts empty.
-const profile = mkdtempSync(join(tmpdir(), "markdown-twain-dev-host-"));
-const userDataDir = join(profile, "user-data");
-const extensionsDir = join(profile, "extensions");
+// A fresh user data dir each run, so SecretStorage starts empty.
+const tempDir = mkdtempSync(join(tmpdir(), "markdown-twain-dev-host-"));
+const userDataDir = join(tempDir, "user-data");
+const extensionsDir = join(tempDir, "extensions");
 mkdirSync(join(userDataDir, "User"), { recursive: true });
 mkdirSync(extensionsDir);
 
@@ -41,7 +41,7 @@ const args = [
   join(root, "sample", "sample.md"),
 ];
 
-console.log(`Profile: ${profile}`);
+console.log(`Temp dir: ${tempDir}`);
 console.log(`Theme: ${theme}`);
 
 // Detached, so this script returns while the window stays open.
@@ -56,3 +56,7 @@ const child =
       })
     : spawn("code", args, options);
 child.unref();
+child.on("error", (error) => {
+  console.error(`Couldn't run \`code\`; is it on PATH? ${error.message}`);
+  process.exitCode = 1;
+});
