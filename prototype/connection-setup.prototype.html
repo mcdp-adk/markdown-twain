@@ -514,7 +514,7 @@ const Twain = (() => {
     const secretId = state.shape === 'connections' ? 'apiKey.' + r.connection : 'apiKey.' + pr.provider;
     if (a.key === 'enter') { st = setSecret(st, secretId, a.keyInput); changes.push('saved key in SecretStorage as ' + secretId); }
     if (['env', 'envNamed', 'none'].includes(a.key) && st.secrets[secretId]) { st = setSecret(st, secretId, null); changes.push('deleted ' + secretId + ' so the environment variable wins'); }
-    return { state: st, changes, runTest: ['setup', 'switch', 'switchConn', 'key'].includes(w.cmd) };
+    return { state: st, changes, runTest: ['setup', 'switch', 'switchConn', 'key', 'model', 'effort'].includes(w.cmd) };
   }
 
   function clearKey(state, env) {
@@ -605,8 +605,8 @@ function runCommand(cmd) {
   if (cmd === 'clearKey') {
     const r = Twain.clearKey(c.state, world().env);
     setState(r.state); r.changes.forEach(x => log(x, 'w'));
-    toast('info', r.note || 'API key cleared.' + (r.changes.length ? '' : ''));
-    return render();
+    if (r.note) { toast('info', r.note); return render(); }
+    return runTest();
   }
   if (cmd === 'remove' && !(c.state.settings[Twain.P + 'connections'] || []).length) { toast('info', 'No connections to remove.'); return render(); }
   c.wiz = { cmd, answers: {} }; c.filter = '';
@@ -852,13 +852,13 @@ const WALKS = [
     steps: sh => sh === 'single' ? [['Model rejects effort', flag('effortRejected', true)], ['Run "Set Up LLM Connection"', cmd('setup')], ['Pick OpenRouter', pick('openrouter')],
       ['Pick "Enter an API key…"', pick('enter')], ['Paste sk-or-bad-0000', type('sk-or-bad-0000')], ['Pick openai/gpt-5-mini', pick('openai/gpt-5-mini')],
       ['Toast: click "Set API Key" (or run it)', cmd('key')], ['Pick "Replace it with a new key…"', pick('enter')], ['Paste sk-or-good-1357', type('sk-or-good-1357')],
-      ['Run "Set Reasoning Effort"', cmd('effort')], ['Pick high', pick('high')], ['Run "Test Connection"', cmd('test')],
-      ['Toast: run "Set Reasoning Effort"', cmd('effort')], ['Pick default', pick('default')], ['Run "Test Connection"', cmd('test')]]
+      ['Run "Set Reasoning Effort"', cmd('effort')], ['Pick high', pick('high')],
+      ['Toast: run "Set Reasoning Effort"', cmd('effort')], ['Pick default', pick('default')]]
     : [['Model rejects effort', flag('effortRejected', true)], ['Run "Set Up LLM Connection"', cmd('setup')], ['Pick OpenRouter', pick('openrouter')],
       ['Pick "Enter an API key…"', pick('enter')], ['Paste sk-or-bad-0000', type('sk-or-bad-0000')], ['Pick openai/gpt-5-mini', pick('openai/gpt-5-mini')], ['Pick effort high', pick('high')],
       ...(sh === 'connections' ? [['Accept the suggested name', accept]] : []),
       ['Toast: click "Set API Key" (or run it)', cmd('key')], ['Pick "Replace it with a new key…"', pick('enter')], ['Paste sk-or-good-1357', type('sk-or-good-1357')],
-      ['Toast: run "Set Reasoning Effort"', cmd('effort')], ['Pick default', pick('default')], ['Run "Test Connection"', cmd('test')]] },
+      ['Toast: run "Set Reasoning Effort"', cmd('effort')], ['Pick default', pick('default')]] },
   { name: 'Edited in Settings UI', desc: 'OpenAI is set up. Then the user changes things directly in the native Settings UI instead of using the commands.',
     watch: 'A: provider → DeepSeek leaves the model at gpt-5-mini, so the test gets a 404, and DeepSeek has no key yet. B: DeepSeek\'s slot is empty, so "No model". C: a typo in activeConnection points at nothing. Which failure feels acceptable?',
     seed: seedOpenAI,
