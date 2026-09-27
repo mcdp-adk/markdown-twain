@@ -10,7 +10,8 @@
     "noUnusedParameters": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["src", "vitest.config.mts"]
+  "include": ["src", "scripts/*.mts", "vitest.config.mts"]
 }
