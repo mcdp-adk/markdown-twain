@@ -1,0 +1,18 @@
+/* PROTOTYPE — throwaway. Bilingual styling loosely after Read Frog's textColor style. */
+.twain-t { color: var(--vscode-textLink-foreground, #3b82f6); }
+.twain-inner { display: block; }
+.twain-p { margin: -0.4em 0 1em; }
+.twain-h1 { font-size: 2em; font-weight: 600; margin: -0.3em 0 0.6em; }
+.twain-h2 { font-size: 1.5em; font-weight: 600; margin: -0.3em 0 0.6em; }
+.twain-h3 { font-size: 1.25em; font-weight: 600; margin: -0.2em 0 0.6em; }
+.twain-h4, .twain-h5, .twain-h6 { font-weight: 600; margin: -0.2em 0 0.6em; }
+.twain-pending { opacity: 0.5; }
+.twain-ghost { visibility: hidden; }
+
+#twain-proto-badge {
+  position: fixed; right: 6px; bottom: 6px; z-index: 9999;
+  font: 11px/1.4 var(--vscode-editor-font-family, monospace);
+  padding: 2px 6px; border-radius: 4px; opacity: 0.75; pointer-events: none;
+  background: var(--vscode-editorWidget-background, #222); color: var(--vscode-editorWidget-foreground, #ddd);
+  border: 1px solid var(--vscode-editorWidget-border, #555);
+}

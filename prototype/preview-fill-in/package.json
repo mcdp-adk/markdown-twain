@@ -1,0 +1,93 @@
+{
+  "name": "markdown-twain-preview-fill-in-prototype",
+  "displayName": "PROTOTYPE: markdown-twain preview fill-in (throwaway)",
+  "description": "Throwaway prototype for 'Prototype progressive fill-in in the built-in preview'. Fake translations, no LLM. Delete me.",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "prototype",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "markdown.markdownItPlugins": true,
+    "markdown.previewStyles": [
+      "./preview.css"
+    ],
+    "markdown.previewScripts": [
+      "./preview.js"
+    ],
+    "commands": [
+      {
+        "command": "twainProto.pickMode",
+        "title": "Twain Proto: Pick Display Mode",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "twainProto.replay",
+        "title": "Twain Proto: Replay Fill-In (clear cache)",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "twainProto.pickVariant",
+        "title": "Twain Proto: Pick Variant",
+        "icon": "$(beaker)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "twainProto.pickMode",
+          "when": "activeWebviewPanelId == 'markdown.preview' || activeCustomEditorId == 'vscode.markdown.preview.editor'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "twainProto.replay",
+          "when": "activeWebviewPanelId == 'markdown.preview' || activeCustomEditorId == 'vscode.markdown.preview.editor'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "twainProto.pickVariant",
+          "when": "activeWebviewPanelId == 'markdown.preview' || activeCustomEditorId == 'vscode.markdown.preview.editor'",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Twain Proto (throwaway)",
+      "properties": {
+        "twainProto.refreshIntervalMs": {
+          "type": "number",
+          "default": 1000,
+          "description": "Throttle between markdown.preview.refresh calls while fake translations land. 0 = refresh only once, when the queue drains."
+        },
+        "twainProto.placeholder": {
+          "type": "string",
+          "enum": ["none", "dots", "ghost"],
+          "default": "dots",
+          "description": "Bilingual only. What a pending block shows below its source: nothing, a one-line '…', or an invisible copy of the source that reserves roughly the final height."
+        },
+        "twainProto.scrollAnchor": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run the data-line scroll-anchor preview script after each reload."
+        },
+        "twainProto.concurrency": {
+          "type": "number",
+          "default": 6,
+          "description": "Fake requests in flight at once."
+        },
+        "twainProto.latencyMinMs": {
+          "type": "number",
+          "default": 400
+        },
+        "twainProto.latencyMaxMs": {
+          "type": "number",
+          "default": 2000
+        }
+      }
+    }
+  }
+}
