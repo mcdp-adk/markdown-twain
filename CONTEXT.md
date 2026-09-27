@@ -24,6 +24,10 @@ _Avoid_: translated mode, target-only
 How hard the model thinks before translating; one of `default` (leave it to the model), `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. `none` turns thinking off, which is not the same as `default`.
 _Avoid_: think effort, thinking level
 
-**Reasoning effort**:
-How much the model is asked to reason before it answers; `default` leaves the choice to the model, and `none` turns reasoning off.
-_Avoid_: think effort, thinking level
+**Provider preset**:
+A built-in, unchangeable set of connection data for a known provider: its base URL, default API-key environment variable, and how it takes a **Reasoning effort**.
+_Avoid_: template, profile
+
+**Custom provider**:
+A provider whose base URL the user enters; it always takes **Reasoning effort** as `reasoning_effort`.
+_Avoid_: other provider, manual provider
