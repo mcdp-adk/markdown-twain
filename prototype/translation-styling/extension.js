@@ -80,6 +80,9 @@ function activate(context) {
       vscode.commands.executeCommand('markdown.preview.refresh');
     }),
     vscode.commands.registerCommand('twainProto.cycleTheme', async () => {
+      // window.autoDetectColorScheme makes VS Code ignore workbench.colorTheme; override it for
+      // this sample workspace only.
+      await vscode.workspace.getConfiguration('window').update('autoDetectColorScheme', false, vscode.ConfigurationTarget.Workspace);
       const c = vscode.workspace.getConfiguration('workbench');
       const next = THEMES[(THEMES.indexOf(c.get('colorTheme')) + 1) % THEMES.length];
       await c.update('colorTheme', next, vscode.ConfigurationTarget.Workspace);
