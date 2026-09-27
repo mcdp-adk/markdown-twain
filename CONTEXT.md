@@ -43,3 +43,7 @@ _Avoid_: profile, account, saved connection
 **Target language**:
 The language translation writes into: either a specific language from the offered list, or `auto`, which follows VS Code's display language.
 _Avoid_: output language, destination language, to-language
+
+**Document brief**:
+A short summary of a document plus its key terms and how each is translated, produced once per document before its **Blocks** are translated and sent along with every translation request, so that separately translated **Blocks** stay consistent.
+_Avoid_: summary, context, glossary
