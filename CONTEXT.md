@@ -31,3 +31,7 @@ _Avoid_: template, profile
 **Custom provider**:
 A provider whose base URL the user enters; it always takes **Reasoning effort** as `reasoning_effort`.
 _Avoid_: other provider, manual provider
+
+**LLM connection**:
+What translation talks to: one **Provider preset** or the **Custom provider**, plus an API key, a model, and a **Reasoning effort**. There is exactly one, set in User settings; switching provider replaces it rather than switching between saved ones.
+_Avoid_: profile, account, saved connection
