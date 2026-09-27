@@ -175,7 +175,7 @@ const VARIANTS = [
   { label: 'D. Anchor', detail: 'refresh every 1000 ms, dots, data-line scroll anchor', v: { refreshIntervalMs: 1000, placeholder: 'dots', scrollAnchor: true } },
   { label: 'E. Anchor + ghost', detail: 'refresh every 1000 ms, ghost placeholder reserves height, scroll anchor', v: { refreshIntervalMs: 1000, placeholder: 'ghost', scrollAnchor: true } },
   { label: 'F. No placeholder + anchor', detail: 'refresh every 1000 ms, nothing below pending blocks, scroll anchor', v: { refreshIntervalMs: 1000, placeholder: 'none', scrollAnchor: true } },
-  { label: 'G. Every 10 s + at end', detail: 'at most one refresh per 10 s while translating, plus one when done; dots, no anchor', v: { refreshIntervalMs: 10000, placeholder: 'dots', scrollAnchor: false } },
+  { label: 'G. Every 10 s + at end', detail: 'at most one refresh per 10 s while translating, plus one when done; dots, no anchor; LLM-like 2–8 s latency', v: { refreshIntervalMs: 10000, placeholder: 'dots', scrollAnchor: false, latencyMinMs: 2000, latencyMaxMs: 8000 } },
 ];
 
 function activate(context) {
