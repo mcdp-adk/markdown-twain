@@ -23,5 +23,24 @@
     "rules": {
       "preset": "recommended"
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/core/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "vscode": "The core never imports vscode; the adapter in src/extension.ts injects what it needs."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }
