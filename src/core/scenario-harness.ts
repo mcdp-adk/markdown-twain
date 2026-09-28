@@ -69,6 +69,9 @@ export interface ScenarioOptions {
   ignoreAbort?: boolean;
   /** How long reading the API key takes before a request can start. */
   secretLatencyMs?: number;
+  /** A provider response for connection setup requests, bypassing translation replies. */
+  connectionFetch?: (url: string, init: RequestInit) => Response | Promise<Response>;
+  now?: () => number;
 }
 
 export function scenario(options: ScenarioOptions = {}) {
@@ -100,6 +103,7 @@ export function scenario(options: ScenarioOptions = {}) {
   let aborted = 0;
 
   const fakeFetch = (async (url: string, init: RequestInit) => {
+    if (options.connectionFetch) return options.connectionFetch(url, init);
     const body = JSON.parse(init.body as string);
     const user = body.messages.at(-1).content as string;
     const input = user.replace(USER_PREFIX, "");
@@ -144,7 +148,7 @@ export function scenario(options: ScenarioOptions = {}) {
     clock: {
       setTimeout: (callback, ms) => setTimeout(callback, ms),
       clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-      now: () => Date.now(),
+      now: options.now ?? (() => Date.now()),
     },
     settings: () => settings,
     secret: async (name) => {

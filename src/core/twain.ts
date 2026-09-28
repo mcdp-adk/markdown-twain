@@ -2,15 +2,24 @@
 // shown. It never imports `vscode`; the adapter injects everything it needs.
 
 import type { MarkdownIt, Renderer, Token } from "markdown-it";
+import {
+  type ConnectionSettings,
+  classifyConnectionError,
+  type KeyChoice,
+  listModels,
+  setupSteps,
+  testConnection,
+} from "./connection.ts";
 import { NO_TRANSLATION_SENTINEL } from "./prompt.ts";
+import type { ReasoningEffort } from "./providers.ts";
 import {
   answerSegments,
   batchInput,
   buildBriefRequest,
   buildRequest,
-  type KeySource,
   RequestError,
   requestInput,
+  resolveApiKey,
   type Settings,
   send,
   type TranslationContext,
@@ -60,6 +69,13 @@ export interface Twain {
   markdownItPlugin(md: MarkdownIt): MarkdownIt;
   setDisplayMode(mode: DisplayMode): void;
   readonly displayMode: DisplayMode;
+  setupSteps(provider: string, effort: ReasoningEffort): ReturnType<typeof setupSteps>;
+  listModels(settings: ConnectionSettings, keyChoice?: KeyChoice): Promise<string[]>;
+  testConnection(settings: ConnectionSettings, keyChoice?: KeyChoice): Promise<number>;
+  classifyConnectionError(
+    error: unknown,
+    settings: ConnectionSettings,
+  ): ReturnType<typeof classifyConnectionError>;
 }
 
 interface Miss {
@@ -203,7 +219,7 @@ export function createTwain(deps: TwainDeps): Twain {
     try {
       const text = deps.readDocument(render.uri);
       if (text === undefined) throw new Error("The document's text can't be read");
-      const apiKey = await resolveApiKey(render.base.keySource);
+      const apiKey = await resolveApiKey(deps.secret, deps.env, render.base.keySource);
       if (current !== run) return;
       const input = text.slice(0, BRIEF_INPUT_CHARS);
       brief = await send(
@@ -237,7 +253,7 @@ export function createTwain(deps: TwainDeps): Twain {
     const { context } = batch[0];
     let segments: string[] | undefined;
     try {
-      const apiKey = await resolveApiKey(context.keySource);
+      const apiKey = await resolveApiKey(deps.secret, deps.env, context.keySource);
       if (current !== run) return;
       const input = batchInput(batch.map((miss) => miss.input));
       const request = buildRequest(context, input, apiKey, current.controller.signal);
@@ -278,10 +294,6 @@ export function createTwain(deps: TwainDeps): Twain {
       current.pending.delete(miss.cacheKey);
     });
     landed(current);
-  }
-
-  async function resolveApiKey(source: KeySource): Promise<string | undefined> {
-    return (await deps.secret(source.secretName)) || (source.envVar && deps.env[source.envVar]) || undefined;
   }
 
   /** Logs the status, the provider's message, the base URL, and the model; never the key or headers. */
@@ -371,6 +383,20 @@ export function createTwain(deps: TwainDeps): Twain {
 
   return {
     markdownItPlugin,
+    setupSteps,
+    listModels: (settings, keyChoice) =>
+      listModels(
+        { fetch: deps.fetch, secret: deps.secret, env: deps.env, now: () => deps.clock.now() },
+        settings,
+        keyChoice,
+      ),
+    testConnection: (settings, keyChoice) =>
+      testConnection(
+        { fetch: deps.fetch, secret: deps.secret, env: deps.env, now: () => deps.clock.now() },
+        settings,
+        keyChoice,
+      ),
+    classifyConnectionError,
     setDisplayMode(next) {
       if (next === "originalOnly") abortRun();
       failed.clear();
