@@ -13,3 +13,7 @@ The five default triage labels are used as-is: `needs-triage`, `needs-info`, `re
 ### Domain docs
 
 Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Conventions
+
+- Use worktrees and PRs by default.
