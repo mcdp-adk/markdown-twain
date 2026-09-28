@@ -16,7 +16,7 @@ import {
 export type DisplayMode = "originalOnly" | "bilingual" | "translationOnly";
 
 /** How long after the last render the latest misses are sent. */
-const QUIET_MS = 1000;
+export const QUIET_MS = 1000;
 /** Requests in flight at once, per window. */
 const MAX_IN_FLIGHT = 4;
 
@@ -91,8 +91,13 @@ export function createTwain(deps: TwainDeps): Twain {
     return translation;
   }
 
-  function restartQuietPeriod(): void {
+  function stopQuietPeriod(): void {
     if (quietTimer !== undefined) deps.clock.clearTimeout(quietTimer);
+    quietTimer = undefined;
+  }
+
+  function restartQuietPeriod(): void {
+    stopQuietPeriod();
     quietTimer = deps.clock.setTimeout(endQuietPeriod, QUIET_MS);
   }
 
@@ -160,8 +165,7 @@ export function createTwain(deps: TwainDeps): Twain {
     run?.controller.abort();
     run = undefined;
     latestMisses.clear();
-    if (quietTimer !== undefined) deps.clock.clearTimeout(quietTimer);
-    quietTimer = undefined;
+    stopQuietPeriod();
   }
 
   function markdownItPlugin(md: MarkdownIt): MarkdownIt {

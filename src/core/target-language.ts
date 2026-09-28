@@ -22,6 +22,13 @@ export function targetLanguageEnum(): { enum: string[]; enumItemLabels: string[]
   };
 }
 
+/** The Target language setting's language: the tag itself, or `auto` resolved from `displayLanguage`. */
+export function resolveTargetLanguage(setting: string, displayLanguage: string): AutoResolution {
+  if (setting === AUTO) return resolveAutoTargetLanguage(displayLanguage);
+  const language = LANGUAGES.find((entry) => entry.tag === setting);
+  return language ? { ok: true, language } : { ok: false, tag: setting };
+}
+
 /**
  * Resolves `auto` from VS Code's display language (`vscode.env.language`):
  * the full tag, then language + script from `Intl.Locale#maximize()`, then the

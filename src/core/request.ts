@@ -6,8 +6,7 @@ import {
   normalizeCustomBaseUrl,
   type ReasoningEffort,
 } from "./providers.ts";
-import { AUTO, resolveAutoTargetLanguage } from "./target-language.ts";
-import { LANGUAGES } from "./languages.ts";
+import { resolveTargetLanguage } from "./target-language.ts";
 
 /** A snapshot of the extension's settings plus `vscode.env.language`. */
 export interface Settings {
@@ -42,11 +41,8 @@ export interface TranslationContext {
 
 /** The context for these settings, or nothing when the Target language or provider doesn't resolve. */
 export function translationContext(settings: Settings): TranslationContext | undefined {
-  const language =
-    settings.targetLanguage === AUTO
-      ? resolveAutoTargetLanguage(settings.displayLanguage)
-      : { ok: true as const, language: LANGUAGES.find((l) => l.tag === settings.targetLanguage) };
-  if (!language.ok || !language.language) return undefined;
+  const language = resolveTargetLanguage(settings.targetLanguage, settings.displayLanguage);
+  if (!language.ok) return undefined;
   const { tag, englishName } = language.language;
 
   let baseUrl: string;

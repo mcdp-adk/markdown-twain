@@ -70,7 +70,6 @@ export function effortField(
  */
 export function normalizeCustomBaseUrl(baseUrl: string): string {
   return baseUrl
-    .trim()
     .replace(/\/+$/, "")
     .replace(/\/chat\/completions$/, "")
     .replace(/\/+$/, "");

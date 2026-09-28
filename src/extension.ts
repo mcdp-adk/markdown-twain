@@ -7,7 +7,7 @@ import type { ReasoningEffort } from "./core/providers.ts";
 import type { Settings } from "./core/request.ts";
 import { createTwain, type DisplayMode } from "./core/twain.ts";
 
-export function activate(context: vscode.ExtensionContext) {
+export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(md: MarkdownIt): MarkdownIt } {
   const log = vscode.window.createOutputChannel("markdown-twain", { log: true });
 
   const twain = createTwain({
@@ -26,9 +26,11 @@ export function activate(context: vscode.ExtensionContext) {
     log,
   });
 
+  const mirrorDisplayMode = () =>
+    void vscode.commands.executeCommand("setContext", "markdownTwain.displayMode", twain.displayMode);
   const setDisplayMode = (mode: DisplayMode) => {
     twain.setDisplayMode(mode);
-    void vscode.commands.executeCommand("setContext", "markdownTwain.displayMode", twain.displayMode);
+    mirrorDisplayMode();
   };
 
   context.subscriptions.push(
@@ -39,7 +41,7 @@ export function activate(context: vscode.ExtensionContext) {
     ),
     vscode.commands.registerCommand("markdownTwain.showLog", () => log.show()),
   );
-  void vscode.commands.executeCommand("setContext", "markdownTwain.displayMode", twain.displayMode);
+  mirrorDisplayMode();
 
   return {
     extendMarkdownIt: (md: MarkdownIt) => twain.markdownItPlugin(md),

@@ -9,7 +9,7 @@ import { vi } from "vitest";
 import type { Settings } from "./request.ts";
 import { createTwain, type DisplayMode } from "./twain.ts";
 
-export const QUIET_MS = 1000;
+export { QUIET_MS } from "./twain.ts";
 export const LATENCY_MS = 100;
 
 export interface SentRequest {

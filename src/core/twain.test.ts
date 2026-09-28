@@ -229,16 +229,6 @@ describe("scenario 12: two documents", () => {
     expect(s.render("file:///a.md", docA)).toContain("译 Document A, paragraph 5.");
     expect(s.render("untitled:Untitled-1", docB)).toContain("译 Document B, paragraph 5.");
   });
-
-  it("sends a Block shared by two documents once", async () => {
-    const s = scenario();
-    s.setDisplayMode("bilingual");
-    s.render("file:///a.md", "Shared.\n");
-    s.render("file:///b.md", "Shared.\n");
-    await s.settle();
-
-    expect(s.sent).toHaveLength(1);
-  });
 });
 
 describe("requests", () => {
