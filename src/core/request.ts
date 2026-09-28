@@ -1,9 +1,9 @@
 import { BATCH_SEPARATOR, translateSystemPrompt, translateUserPrefix } from "./prompt.ts";
 import {
   CUSTOM_PROVIDER_ID,
-  PROVIDER_PRESETS,
   effortField,
   normalizeCustomBaseUrl,
+  PROVIDER_PRESETS,
   type ReasoningEffort,
 } from "./providers.ts";
 import { resolveTargetLanguage } from "./target-language.ts";
@@ -132,10 +132,7 @@ export class RequestError extends Error {
 }
 
 /** Sends one request and returns the model's text, with a leading `<think>…</think>` stripped and trimmed. */
-export async function send(
-  fetch: typeof globalThis.fetch,
-  request: [string, RequestInit],
-): Promise<string> {
+export async function send(fetch: typeof globalThis.fetch, request: [string, RequestInit]): Promise<string> {
   let response: Response;
   try {
     response = await fetch(...request);

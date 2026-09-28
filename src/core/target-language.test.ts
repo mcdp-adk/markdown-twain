@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LANGUAGES } from "./languages.ts";
-import {
-  languageLabel,
-  resolveAutoTargetLanguage,
-  targetLanguageEnum,
-} from "./target-language.ts";
+import { languageLabel, resolveAutoTargetLanguage, targetLanguageEnum } from "./target-language.ts";
 
 describe("resolveAutoTargetLanguage", () => {
   it.each([
@@ -22,15 +18,12 @@ describe("resolveAutoTargetLanguage", () => {
     });
   });
 
-  it.each(["qps-ploc", "", "not a tag"])(
-    "fails on %j and carries the tag",
-    (displayLanguage) => {
-      expect(resolveAutoTargetLanguage(displayLanguage)).toEqual({
-        ok: false,
-        tag: displayLanguage,
-      });
-    },
-  );
+  it.each(["qps-ploc", "", "not a tag"])("fails on %j and carries the tag", (displayLanguage) => {
+    expect(resolveAutoTargetLanguage(displayLanguage)).toEqual({
+      ok: false,
+      tag: displayLanguage,
+    });
+  });
 });
 
 describe("languageLabel", () => {
@@ -41,15 +34,11 @@ describe("languageLabel", () => {
   });
 
   it("shows only the English name when the native name is missing", () => {
-    expect(languageLabel({ tag: "fuv", englishName: "Nigerian Fulfulde" })).toBe(
-      "Nigerian Fulfulde",
-    );
+    expect(languageLabel({ tag: "fuv", englishName: "Nigerian Fulfulde" })).toBe("Nigerian Fulfulde");
   });
 
   it("shows only the English name when the native name is the same", () => {
-    expect(languageLabel({ tag: "en", englishName: "English", nativeName: "English" })).toBe(
-      "English",
-    );
+    expect(languageLabel({ tag: "en", englishName: "English", nativeName: "English" })).toBe("English");
   });
 });
 

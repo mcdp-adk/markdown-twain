@@ -4,16 +4,16 @@
 import type { MarkdownIt, Renderer, Token } from "markdown-it";
 import { NO_TRANSLATION_SENTINEL } from "./prompt.ts";
 import {
-  RequestError,
   answerSegments,
   batchInput,
   buildRequest,
-  requestInput,
-  send,
-  translationContext,
   type KeySource,
+  RequestError,
+  requestInput,
   type Settings,
+  send,
   type TranslationContext,
+  translationContext,
 } from "./request.ts";
 
 export type DisplayMode = "originalOnly" | "bilingual" | "translationOnly";
