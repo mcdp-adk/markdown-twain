@@ -56,10 +56,7 @@ export const REASONING_EFFORTS = [
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 /** The Reasoning effort field for a request body; `default` sends nothing. */
-export function effortField(
-  style: EffortStyle,
-  effort: ReasoningEffort,
-): Record<string, unknown> {
+export function effortField(style: EffortStyle, effort: ReasoningEffort): Record<string, unknown> {
   if (effort === "default") return {};
   return style === "openrouter" ? { reasoning: { effort } } : { reasoning_effort: effort };
 }

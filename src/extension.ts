@@ -1,8 +1,8 @@
 // The adapter: the only code that imports `vscode`. It wires VS Code into the
 // core and holds no decisions of its own.
 
-import * as vscode from "vscode";
 import type { MarkdownIt } from "markdown-it";
+import * as vscode from "vscode";
 import type { ReasoningEffort } from "./core/providers.ts";
 import type { Settings } from "./core/request.ts";
 import { createTwain, type DisplayMode } from "./core/twain.ts";
@@ -36,9 +36,7 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
   context.subscriptions.push(
     log,
     vscode.commands.registerCommand("markdownTwain.showBilingual", () => setDisplayMode("bilingual")),
-    vscode.commands.registerCommand("markdownTwain.showOriginalOnly", () =>
-      setDisplayMode("originalOnly"),
-    ),
+    vscode.commands.registerCommand("markdownTwain.showOriginalOnly", () => setDisplayMode("originalOnly")),
     vscode.commands.registerCommand("markdownTwain.showLog", () => log.show()),
   );
   mirrorDisplayMode();

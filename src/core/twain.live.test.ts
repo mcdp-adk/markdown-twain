@@ -72,7 +72,9 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
       error: (message) => errors.push(message),
     },
   });
-  const md = twain.markdownItPlugin(new MarkdownIt({ html: true, linkify: true }).use(frontMatter, () => {}).use(katex));
+  const md = twain.markdownItPlugin(
+    new MarkdownIt({ html: true, linkify: true }).use(frontMatter, () => {}).use(katex),
+  );
   const sample = readFileSync(SAMPLE, "utf8");
 
   twain.setDisplayMode("bilingual");
@@ -96,6 +98,8 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
 
   // URLs and inline code survive unchanged.
   for (const { blocks, segments } of answered) {
-    blocks.forEach((block, i) => expect(verbatimParts(segments[i])).toEqual(verbatimParts(block)));
+    blocks.forEach((block, i) => {
+      expect(verbatimParts(segments[i])).toEqual(verbatimParts(block));
+    });
   }
 });

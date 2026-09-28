@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  LATENCY_MS,
-  QUIET_MS,
-  SENTINEL,
   fakeTranslation,
   joinSegments,
+  LATENCY_MS,
+  QUIET_MS,
+  type Reply,
+  SENTINEL,
+  type SentRequest,
   scenario,
   withoutTranslations,
-  type Reply,
-  type SentRequest,
 } from "./scenario-harness.ts";
 
 afterEach(() => {
@@ -357,7 +357,9 @@ describe("scenario 5: sentinel and empty segments", () => {
     // A model that echoes the Block instead of answering with the sentinel; the echo is of what was sent.
     const s = scenario({
       reply: (request) => ({
-        content: joinSegments(request.blocks.map((block) => (block.startsWith("这") ? block : fakeTranslation(block)))),
+        content: joinSegments(
+          request.blocks.map((block) => (block.startsWith("这") ? block : fakeTranslation(block))),
+        ),
       }),
     });
     s.setDisplayMode("bilingual");

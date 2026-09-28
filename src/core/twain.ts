@@ -4,16 +4,16 @@
 import type { MarkdownIt, Renderer, Token } from "markdown-it";
 import { NO_TRANSLATION_SENTINEL } from "./prompt.ts";
 import {
-  RequestError,
   answerSegments,
   batchInput,
   buildRequest,
-  requestInput,
-  send,
-  translationContext,
   type KeySource,
+  RequestError,
+  requestInput,
   type Settings,
+  send,
   type TranslationContext,
+  translationContext,
 } from "./request.ts";
 
 export type DisplayMode = "originalOnly" | "bilingual" | "translationOnly";
@@ -128,9 +128,11 @@ export function createTwain(deps: TwainDeps): Twain {
   }
 
   function pump(current: Run): void {
-    while (current.inFlight < MAX_IN_FLIGHT && current.queue.length > 0) {
+    while (current.inFlight < MAX_IN_FLIGHT) {
+      const batch = current.queue.shift();
+      if (!batch) return;
       current.inFlight++;
-      void dispatch(current, current.queue.shift()!);
+      void dispatch(current, batch);
     }
   }
 

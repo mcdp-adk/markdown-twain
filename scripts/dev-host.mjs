@@ -19,14 +19,9 @@ const extensionsDir = join(tempDir, "extensions");
 mkdirSync(join(userDataDir, "User"), { recursive: true });
 mkdirSync(extensionsDir);
 
-const settings = JSON.parse(
-  readFileSync(join(root, "scripts", "dev-host", "settings.json"), "utf8"),
-);
+const settings = JSON.parse(readFileSync(join(root, "scripts", "dev-host", "settings.json"), "utf8"));
 settings["workbench.colorTheme"] = theme;
-writeFileSync(
-  join(userDataDir, "User", "settings.json"),
-  JSON.stringify(settings, null, 2) + "\n",
-);
+writeFileSync(join(userDataDir, "User", "settings.json"), `${JSON.stringify(settings, null, 2)}\n`);
 
 // When this runs inside VS Code's own terminal or extension host, the variable
 // leaks in and would make Code.exe start as plain Node.
