@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fakeTranslation,
-  joinSegments,
+  joinResponseParts,
   LATENCY_MS,
   QUIET_MS,
   type Reply,
@@ -443,7 +443,7 @@ describe("scenario 4: batching", () => {
     );
   });
 
-  it("sends each Block on its own when a batch comes back with the wrong segment count", async () => {
+  it("sends each Block on its own when a batch comes back with the wrong response part count", async () => {
     const s = scenario({
       // A model that ignores the separators and answers in one piece.
       reply: (request) => ({ content: request.blocks.map(fakeTranslation).join("\n\n") }),
@@ -467,7 +467,7 @@ describe("scenario 4: batching", () => {
   });
 });
 
-describe("scenario 5: sentinel and empty segments", () => {
+describe("scenario 5: sentinel and empty responses", () => {
   const ALREADY = "这一段已经是简体中文。";
   const EMPTY = "The model skips this one.";
   const doc = `First paragraph.\n\n${ALREADY}\n\n${EMPTY}\n`;
@@ -476,7 +476,7 @@ describe("scenario 5: sentinel and empty segments", () => {
     if (block === EMPTY) return "";
     return fakeTranslation(block);
   };
-  const reply = (request: SentRequest): Reply => ({ content: joinSegments(request.blocks.map(answer)) });
+  const reply = (request: SentRequest): Reply => ({ content: joinResponseParts(request.blocks.map(answer)) });
 
   it("renders a sentinel Block as source in every mode and never requests it again", async () => {
     const s = scenario({ reply });
@@ -498,7 +498,7 @@ describe("scenario 5: sentinel and empty segments", () => {
     expect(s.sent.map((request) => request.blocks)).toEqual([["First paragraph.", ALREADY, EMPTY], [EMPTY]]);
   });
 
-  it("leaves an empty segment as source, doesn't re-request it on the next render, and sends it again on a retry", async () => {
+  it("leaves an empty response part as source, doesn't re-request it on the next render, and sends it again on a retry", async () => {
     const s = scenario({ reply });
     await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
@@ -521,7 +521,7 @@ describe("scenario 5: sentinel and empty segments", () => {
     let skip = true;
     const s = scenario({
       reply: (request) => ({
-        content: joinSegments(
+        content: joinResponseParts(
           request.blocks.map((block) => (block === EMPTY && !skip ? fakeTranslation(block) : answer(block))),
         ),
       }),
@@ -566,13 +566,13 @@ describe("scenario 5: sentinel and empty segments", () => {
     expect(s.sent).toHaveLength(1);
   });
 
-  it("treats a segment identical to its Block like the sentinel", async () => {
+  it("treats a response part identical to its Block like the sentinel", async () => {
     const soft = "这一段已经是\n简体中文。";
     const doc = `First paragraph.\n\n${soft}\n`;
     // A model that echoes the Block instead of answering with the sentinel; the echo is of what was sent.
     const s = scenario({
       reply: (request) => ({
-        content: joinSegments(
+        content: joinResponseParts(
           request.blocks.map((block) => (block.startsWith("这") ? block : fakeTranslation(block))),
         ),
       }),
@@ -742,6 +742,8 @@ describe("scenario 6: Document brief", () => {
     expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
     expect(s.twain.status).toEqual({ kind: "halted", error });
     expect(s.runEnds).toEqual([{ kind: "halted", error }]);
+    expect(s.logLines.join("\n")).toContain("Document brief returned empty content (6 Blocks,");
+    expect(s.logLines.join("\n")).not.toContain("request failed");
     expect(s.logLines.join("\n")).not.toContain("http.proxy");
     expect(s.render(DOC, doc)).toBe(s.plainRender(doc));
     await s.settle();
@@ -873,7 +875,7 @@ describe("status", () => {
     const s = scenario({
       latencyMs: 3 * QUIET_MS,
       reply: (request) => ({
-        content: joinSegments(
+        content: joinResponseParts(
           request.blocks.map((block) => (block === "B fails." ? "" : fakeTranslation(block))),
         ),
       }),
@@ -1133,7 +1135,7 @@ describe("scenario 13: settings changes", () => {
       reply: (request) =>
         request.body.model === "broken"
           ? { status: 401, body: { error: { message: "Bad credentials" } } }
-          : { content: joinSegments(request.blocks.map(fakeTranslation)) },
+          : { content: joinResponseParts(request.blocks.map(fakeTranslation)) },
       settings: { model: "broken" },
     });
     await s.setDisplayMode("bilingual");
@@ -1447,9 +1449,9 @@ describe("retry and halted runs", () => {
     const s = scenario({
       reply: (request) => {
         attempts++;
-        if (attempts === 1) return { content: joinSegments(request.blocks.map(fakeTranslation)) };
+        if (attempts === 1) return { content: joinResponseParts(request.blocks.map(fakeTranslation)) };
         if (attempts === 2) return { status: 401, body: { error: { message: "Bad credentials" } } };
-        return { content: joinSegments(request.blocks.map(fakeTranslation)) };
+        return { content: joinResponseParts(request.blocks.map(fakeTranslation)) };
       },
       connectionFetch: () =>
         new Response("data: ping\n\n", { headers: { "Content-Type": "text/event-stream" } }),

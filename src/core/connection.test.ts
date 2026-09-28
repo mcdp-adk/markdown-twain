@@ -179,9 +179,90 @@ describe("scenario 15: LLM connection through Twain", () => {
     } catch (caught) {
       error = caught;
     }
+    expect((error as Error).message).toBe("ECONNREFUSED [redacted] refused");
     const classified = network.twain.classifyConnectionError(error, settings);
     expect(classified.message).toContain("ECONNREFUSED [redacted] refused");
     expect(classified.message).not.toContain("secret-value");
+  });
+
+  it("shows sanitized cause details when a Document brief loses its connection", async () => {
+    const key = "mock-secret-key";
+    const s = scenario({
+      secrets: { "apiKey.openrouter": key },
+      briefReply: () => {
+        throw Object.assign(new Error(`fetch failed with ${key}`), {
+          cause: { code: "ECONNRESET", message: `connection reset for ${key}` },
+        });
+      },
+    });
+    await s.setDisplayMode("bilingual");
+    s.render("file:///network.md", "Hello.\n");
+    await s.settle();
+
+    expect(s.runEnds).toEqual([
+      {
+        kind: "halted",
+        error: {
+          message: "ECONNRESET connection reset for [redacted]. Check VS Code's `http.proxy` setting.",
+        },
+      },
+    ]);
+    expect(s.logLines.join("\n")).toContain("ECONNRESET connection reset for [redacted]");
+    expect(s.logLines.join("\n")).not.toContain(key);
+  });
+
+  it("redacts errors while reading a failed provider response", async () => {
+    const key = "mock-secret-key";
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(
+            Object.assign(new Error(`read failed for ${key}`), {
+              cause: { code: "ECONNRESET", message: `${key} connection closed` },
+            }),
+          );
+        },
+      }),
+      { status: 400 },
+    );
+    const { twain } = scenario({ connectionFetch: async () => response });
+    let error: unknown;
+    try {
+      await twain.testConnection(settings, { kind: "new", value: key });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect((error as Error).message).toBe("ECONNRESET [redacted] connection closed");
+    expect(twain.classifyConnectionError(error, settings)).toEqual({
+      message: "ECONNRESET [redacted] connection closed. Check VS Code's `http.proxy` setting.",
+    });
+  });
+
+  it("redacts errors while reading the SSE stream", async () => {
+    const key = "mock-secret-key";
+    const { twain } = scenario({
+      connectionFetch: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error(`stream dropped for ${key}`));
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        ),
+    });
+    let error: unknown;
+    try {
+      await twain.testConnection(settings, { kind: "new", value: key });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect((error as Error).message).toBe("stream dropped for [redacted]");
+    expect(twain.classifyConnectionError(error, settings)).toEqual({
+      message: "stream dropped for [redacted]. Check VS Code's `http.proxy` setting.",
+    });
   });
 
   it.each([

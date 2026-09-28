@@ -1,4 +1,5 @@
 import { briefSystemPrompt, briefUserMessage } from "./brief-prompt.ts";
+import { networkFailure, redact } from "./error-message.ts";
 import { BATCH_SEPARATOR, translateSystemPrompt, translateUserPrefix } from "./prompt.ts";
 import { effortField, providerConnection, type ReasoningEffort } from "./providers.ts";
 import { resolveTargetLanguage } from "./target-language.ts";
@@ -95,11 +96,13 @@ export function batchInput(inputs: string[]): string {
 
 /**
  * The answer to a batch of `blockCount` Blocks, split on separator lines into
- * trimmed segments. A single Block's answer is its one segment, so its
+ * trimmed response parts. A single Block's answer is its one response part, so its
  * per-Block fallback can't mismatch again.
  */
-export function answerSegments(answer: string, blockCount: number): string[] {
-  return blockCount === 1 ? [answer] : answer.split(SEPARATOR_LINE).map((segment) => segment.trim());
+export function splitBatchResponse(answer: string, blockCount: number): string[] {
+  return blockCount === 1
+    ? [answer]
+    : answer.split(SEPARATOR_LINE).map((responsePart) => responsePart.trim());
 }
 
 export function buildRequest(
@@ -162,15 +165,8 @@ function apiKeyFrom(request: [string, RequestInit]): string | undefined {
   return authorization?.match(/^Bearer (.+)$/i)?.[1];
 }
 
-function redact(message: string, apiKey: string | undefined): string {
-  return apiKey ? message.replaceAll(apiKey, "[redacted]") : message;
-}
-
 function networkError(error: unknown, apiKey: string | undefined): RequestError {
-  const source = error as { message?: string; cause?: { code?: string; message?: string } };
-  const cause = source?.cause;
-  const details = [cause?.code, cause?.message].filter(Boolean).join(" ");
-  return new RequestError(undefined, redact(details || source?.message || String(error), apiKey));
+  return new RequestError(undefined, networkFailure(error, apiKey).message);
 }
 
 function timeoutError(): RequestError {

@@ -7,7 +7,7 @@ import katex from "@vscode/markdown-it-katex";
 import MarkdownIt from "markdown-it";
 import frontMatter from "markdown-it-front-matter";
 import { expect, it } from "vitest";
-import { answerSegments, type Settings } from "./request.ts";
+import { type Settings, splitBatchResponse } from "./request.ts";
 import { createTwain } from "./twain.ts";
 
 const SETTINGS: Settings = {
@@ -28,7 +28,7 @@ const USER_PREFIX = /^Translate to [^:\n]+:\n\n\n/;
 interface Exchange {
   system: string;
   blocks: string[];
-  segments: string[];
+  responseParts: string[];
 }
 
 /** The link URLs and inline code spans in a piece of inline Markdown. */
@@ -64,7 +64,7 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
       exchanges.push({
         system: body.messages[0].content,
         blocks,
-        segments: answerSegments(content, blocks.length),
+        responseParts: splitBatchResponse(content, blocks.length),
       });
       return response;
     },
@@ -100,13 +100,14 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
   expect(briefs).toHaveLength(1);
   expect(briefs[0]).not.toBe("");
   for (const { system } of exchanges) expect(system).toContain(`\nDocument brief: ${briefs[0]}`);
-  // Segment counts match. The one exception is a batch whose Blocks all need no
+  // Response part counts match. The one exception is a batch whose Blocks all need no
   // translation, collapsed into a single sentinel: the per-Block fallback recovers it.
   expect(exchanges.some(({ blocks }) => blocks.length > 1)).toBe(true);
   const answered = exchanges.filter(
-    ({ blocks, segments }) => !(blocks.length > 1 && segments.length === 1 && segments[0] === SENTINEL),
+    ({ blocks, responseParts }) =>
+      !(blocks.length > 1 && responseParts.length === 1 && responseParts[0] === SENTINEL),
   );
-  for (const { blocks, segments } of answered) expect(segments).toHaveLength(blocks.length);
+  for (const { blocks, responseParts } of answered) expect(responseParts).toHaveLength(blocks.length);
 
   // The paragraph already in Simplified Chinese gets no translation under it.
   const chinese = html.indexOf("<p>世界上");
@@ -114,9 +115,9 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
   expect(html.slice(html.indexOf("</p>", chinese))).not.toMatch(/^<\/p>\n<div class="twain-t">/);
 
   // URLs and inline code survive unchanged.
-  for (const { blocks, segments } of answered) {
+  for (const { blocks, responseParts } of answered) {
     blocks.forEach((block, i) => {
-      expect(verbatimParts(segments[i])).toEqual(verbatimParts(block));
+      expect(verbatimParts(responseParts[i])).toEqual(verbatimParts(block));
     });
   }
 });

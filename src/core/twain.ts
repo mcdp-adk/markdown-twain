@@ -18,7 +18,6 @@ import {
   type ReasoningEffort,
 } from "./providers.ts";
 import {
-  answerSegments,
   batchInput,
   buildBriefRequest,
   buildRequest,
@@ -27,6 +26,7 @@ import {
   resolveApiKey,
   type Settings,
   send,
+  splitBatchResponse,
   type TranslationContext,
   translationContext,
 } from "./request.ts";
@@ -414,13 +414,13 @@ export function createTwain(deps: TwainDeps): Twain {
 
   async function dispatchBatch(current: Run, batch: Miss[]): Promise<void> {
     const { context, settings } = batch[0];
-    let segments: string[] | undefined;
+    let responseParts: string[] | undefined;
     try {
       const check = await dispatchPreflight(current, settings);
       if (!check) return;
       const input = batchInput(batch.map((miss) => miss.input));
       const request = buildRequest(context, input, check.apiKey, current.controller.signal);
-      segments = answerSegments(await send(deps.fetch, request), batch.length);
+      responseParts = splitBatchResponse(await send(deps.fetch, request), batch.length);
     } catch (error) {
       if (current === run) {
         logRequestFailure(
@@ -437,23 +437,23 @@ export function createTwain(deps: TwainDeps): Twain {
     if (current !== run) return;
     current.inFlight--;
 
-    if (segments && segments.length !== batch.length) {
+    if (responseParts && responseParts.length !== batch.length) {
       deps.log.info(
-        `A batch of ${batch.length} Blocks came back as ${segments.length} segments; sending each Block on its own.`,
+        `A batch of ${batch.length} Blocks came back as ${responseParts.length} response parts; sending each Block on its own.`,
       );
       for (const miss of batch) current.queue.push(() => dispatchBatch(current, [miss]));
       pump(current);
       return;
     }
     batch.forEach((miss, i) => {
-      const segment = segments?.[i];
+      const responsePart = responseParts?.[i];
       // Models often echo a Block already in the Target language instead of answering with the sentinel.
-      if (segment === NO_TRANSLATION_SENTINEL || segment === miss.input) {
+      if (responsePart === NO_TRANSLATION_SENTINEL || responsePart === miss.input) {
         cache.set(miss.cacheKey, { kind: "noTranslationNeeded" });
-      } else if (segment) {
-        cache.set(miss.cacheKey, { kind: "translation", text: segment });
+      } else if (responsePart) {
+        cache.set(miss.cacheKey, { kind: "translation", text: responsePart });
       } else {
-        if (segments) deps.log.error(`A Block came back empty (${context.url}, model ${context.model})`);
+        if (responseParts) deps.log.error(`A Block came back empty (${context.url}, model ${context.model})`);
         failed.add(miss.cacheKey);
         current.blocksFailed++;
         failuresSinceRetry.count++;
@@ -473,9 +473,11 @@ export function createTwain(deps: TwainDeps): Twain {
   ): void {
     const status = error instanceof RequestError && error.status !== undefined ? `${error.status} ` : "";
     const message = error instanceof Error ? error.message : String(error);
-    deps.log.error(
-      `${request} request failed: ${status}${message} (${subject}, ${context.url}, model ${context.model})`,
-    );
+    const failure =
+      error instanceof EmptyBriefError
+        ? "Document brief returned empty content"
+        : `${request} request failed: ${status}${message}`;
+    deps.log.error(`${failure} (${subject}, ${context.url}, model ${context.model})`);
   }
 
   function haltRun(current: Run, classified: RunError): void {

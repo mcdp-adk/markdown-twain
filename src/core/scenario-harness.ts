@@ -37,9 +37,9 @@ export const USER_PREFIX = /^Translate to [^:\n]+:\n\n\n/;
 export const BATCH_JOINER = "\n\n%%\n\n";
 export const SENTINEL = "{{NO_TRANSLATION_NEEDED}}";
 
-/** A batch answer: one segment per Block, joined the way the prompt asks. */
-export function joinSegments(segments: string[]): string {
-  return segments.join(BATCH_JOINER);
+/** A batch answer: one response part per Block, joined the way the prompt asks. */
+export function joinResponseParts(responseParts: string[]): string {
+  return responseParts.join(BATCH_JOINER);
 }
 
 /** The fake model's translation: the input, marked, with its Markdown intact. */
@@ -90,7 +90,7 @@ export function scenario(options: ScenarioOptions = {}) {
   const env = options.env ?? { OPENROUTER_API_KEY: "sk-or-env-key" };
   const secrets = options.secrets ?? {};
   const reply =
-    options.reply ?? ((request) => ({ content: joinSegments(request.blocks.map(fakeTranslation)) }));
+    options.reply ?? ((request) => ({ content: joinResponseParts(request.blocks.map(fakeTranslation)) }));
   const briefReply = options.briefReply ?? ((request) => ({ content: fakeBrief(request) }));
 
   /** Each document's current text, as last rendered. */
