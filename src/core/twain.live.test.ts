@@ -89,7 +89,7 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
     new MarkdownIt({ html: true, linkify: true }).use(frontMatter, () => {}).use(katex),
   );
 
-  twain.setDisplayMode("bilingual");
+  await twain.setDisplayMode("bilingual");
   md.render(sample, { currentDocument: DOC });
   rendered = true;
   await runEnded;
