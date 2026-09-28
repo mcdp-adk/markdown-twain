@@ -204,6 +204,7 @@ export function createTwain(deps: TwainDeps): Twain {
       const text = deps.readDocument(render.uri);
       if (text === undefined) throw new Error("The document's text can't be read");
       const apiKey = await resolveApiKey(render.base.keySource);
+      if (current !== run) return;
       const input = text.slice(0, BRIEF_INPUT_CHARS);
       brief = await send(
         deps.fetch,
@@ -237,6 +238,7 @@ export function createTwain(deps: TwainDeps): Twain {
     let segments: string[] | undefined;
     try {
       const apiKey = await resolveApiKey(context.keySource);
+      if (current !== run) return;
       const input = batchInput(batch.map((miss) => miss.input));
       const request = buildRequest(context, input, apiKey, current.controller.signal);
       segments = answerSegments(await send(deps.fetch, request), batch.length);

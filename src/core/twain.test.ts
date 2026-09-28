@@ -143,7 +143,45 @@ describe("scenario 1: bilingual", () => {
   });
 });
 
-describe("scenario 2: originalOnly", () => {
+describe("scenario 2: translationOnly and originalOnly", () => {
+  it("replaces only inline content, retaining source heading ids and preview containers", async () => {
+    const s = scenario({
+      decorateMarkdownIt: (md) =>
+        md.core.ruler.push("preview-attributes", (state) => {
+          for (const token of state.tokens) {
+            if (token.type === "heading_open") token.attrSet("id", "source-heading");
+            if (token.type === "paragraph_open") token.attrSet("data-line", "3");
+          }
+        }),
+    });
+    const doc = "# Source Heading\n\nA [link](#source-heading) and `code`.\n\n- a list item\n";
+    s.setDisplayMode("translationOnly");
+    expect(s.render(DOC, doc)).toBe(s.plainRender(doc));
+    await s.settle();
+
+    const html = s.render(DOC, doc);
+    expect(html).toContain('<h1 id="source-heading">译 Source Heading</h1>');
+    expect(html).toContain(
+      '<p data-line="3">译 A <a href="#source-heading">link</a> and <code>code</code>.</p>',
+    );
+    expect(html).toContain("<li>译 a list item</li>");
+    expect(html).not.toContain('class="twain-t"');
+    expect(html).not.toContain("<div");
+  });
+
+  it("keeps the active run when switching between translated modes", async () => {
+    const s = scenario();
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.advance(QUIET_MS + LATENCY_MS * 1.5);
+
+    s.setDisplayMode("translationOnly");
+    expect(s.aborted).toBe(0);
+    await s.settle();
+    expect(s.sent).toHaveLength(1);
+    expect(s.render(DOC, "Hello.\n")).toBe("<p>译 Hello.</p>\n");
+  });
+
   it("starts in originalOnly, renders byte-identical to the unplugged renderer, and sends nothing", async () => {
     const s = scenario();
     expect(s.twain.displayMode).toBe("originalOnly");
@@ -714,6 +752,57 @@ describe("interim failure handling", () => {
     expect(s.refreshes).toBe(refreshesAfter);
 
     s.setDisplayMode("bilingual");
+    expect(s.render(DOC, "Hello.\n")).toBe(s.plainRender("Hello.\n"));
+  });
+
+  it("aborts in-flight requests, leaves queued requests unsent, and retries all Blocks later", async () => {
+    const s = scenario();
+    const doc = Array.from({ length: 20 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n");
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.advance(QUIET_MS + LATENCY_MS * 1.5);
+    expect(s.sent).toHaveLength(4);
+
+    s.setDisplayMode("originalOnly");
+    const refreshesAfter = s.refreshes;
+    expect(s.aborted).toBe(4);
+    expect(s.render(DOC, doc)).toBe(s.plainRender(doc));
+    await s.settle();
+    expect(s.sent).toHaveLength(4);
+    expect(s.refreshes).toBe(refreshesAfter);
+
+    s.setDisplayMode("translationOnly");
+    s.render(DOC, doc);
+    await s.settle();
+    expect(s.sent.slice(4).flatMap((request) => request.blocks)).toHaveLength(20);
+  });
+
+  it("discards answers that arrive after cancellation", async () => {
+    const s = scenario({ ignoreAbort: true });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.advance(QUIET_MS + LATENCY_MS * 1.5);
+    s.setDisplayMode("originalOnly");
+    const refreshesAfter = s.refreshes;
+    await s.settle();
+    expect(s.aborted).toBe(1);
+    expect(s.refreshes).toBe(refreshesAfter);
+
+    s.setDisplayMode("translationOnly");
+    expect(s.render(DOC, "Hello.\n")).toBe(s.plainRender("Hello.\n"));
+    await s.settle();
+    expect(s.sent).toHaveLength(2);
+  });
+
+  it("does not send a request when cancellation happens while reading the key", async () => {
+    const s = scenario({ secretLatencyMs: LATENCY_MS * 10 });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.advance(QUIET_MS + LATENCY_MS);
+    s.setDisplayMode("originalOnly");
+    await s.settle();
+
+    expect(s.requests).toHaveLength(0);
     expect(s.render(DOC, "Hello.\n")).toBe(s.plainRender("Hello.\n"));
   });
 });

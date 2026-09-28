@@ -3,7 +3,7 @@
 // fake timers, and a fake `fetch` that translates deterministically.
 
 import katex from "@vscode/markdown-it-katex";
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from "markdown-it";
 import frontMatter from "markdown-it-front-matter";
 import { vi } from "vitest";
 import type { Settings } from "./request.ts";
@@ -63,6 +63,12 @@ export interface ScenarioOptions {
   reply?: (request: SentRequest) => Reply;
   /** Overrides the fake provider's answer to Document brief requests. */
   briefReply?: (request: SentRequest) => Reply;
+  /** Preview-owned token attributes, applied to both renderers. */
+  decorateMarkdownIt?: (md: MarkdownItInstance) => void;
+  /** Simulates a provider that completes even after cancellation. */
+  ignoreAbort?: boolean;
+  /** How long reading the API key takes before a request can start. */
+  secretLatencyMs?: number;
 }
 
 export function scenario(options: ScenarioOptions = {}) {
@@ -91,6 +97,7 @@ export function scenario(options: ScenarioOptions = {}) {
   let inFlight = 0;
   let maxInFlight = 0;
   let refreshes = 0;
+  let aborted = 0;
 
   const fakeFetch = (async (url: string, init: RequestInit) => {
     const body = JSON.parse(init.body as string);
@@ -108,15 +115,21 @@ export function scenario(options: ScenarioOptions = {}) {
     requests.push(request);
     inFlight++;
     maxInFlight = Math.max(maxInFlight, inFlight);
+    let abortListener: (() => void) | undefined;
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, options.latencyMs ?? LATENCY_MS);
-        init.signal?.addEventListener("abort", () => {
-          clearTimeout(timer);
-          reject(new DOMException("aborted", "AbortError"));
-        });
+        abortListener = () => {
+          aborted++;
+          if (!options.ignoreAbort) {
+            clearTimeout(timer);
+            reject(new DOMException("aborted", "AbortError"));
+          }
+        };
+        init.signal?.addEventListener("abort", abortListener);
       });
     } finally {
+      if (abortListener) init.signal?.removeEventListener("abort", abortListener);
       inFlight--;
     }
     const answer = request.kind === "brief" ? briefReply(request) : reply(request);
@@ -134,7 +147,12 @@ export function scenario(options: ScenarioOptions = {}) {
       now: () => Date.now(),
     },
     settings: () => settings,
-    secret: async (name) => secrets[name],
+    secret: async (name) => {
+      if (options.secretLatencyMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.secretLatencyMs));
+      }
+      return secrets[name];
+    },
     env,
     readDocument: (uri) => documents.get(uri),
     log: {
@@ -143,8 +161,11 @@ export function scenario(options: ScenarioOptions = {}) {
     },
   });
 
-  const newMarkdownIt = () =>
-    new MarkdownIt({ html: true, linkify: true }).use(frontMatter, () => {}).use(katex);
+  const newMarkdownIt = () => {
+    const md = new MarkdownIt({ html: true, linkify: true }).use(frontMatter, () => {}).use(katex);
+    options.decorateMarkdownIt?.(md);
+    return md;
+  };
   const md = twain.markdownItPlugin(newMarkdownIt());
   const plain = newMarkdownIt();
 
@@ -163,6 +184,9 @@ export function scenario(options: ScenarioOptions = {}) {
     },
     get maxInFlight() {
       return maxInFlight;
+    },
+    get aborted() {
+      return aborted;
     },
     /** Renders the way the preview does, with `env.currentDocument`; `text` becomes the document's current text. */
     render: (uri: string, text: string) => {
