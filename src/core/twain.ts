@@ -56,7 +56,7 @@ export interface TwainDeps {
 }
 
 /**
- * What the status bar shows. Counts are Blocks, never requests or briefs:
+ * Translation progress, with change events. Counts are Blocks, never requests or briefs:
  * `landed` includes failed Blocks, and `total` is every Block the run's pending
  * set has held, across all documents.
  */
@@ -116,11 +116,11 @@ interface Run {
   /** Per brief key in flight, the misses of the document's latest render, enqueued once its brief lands. */
   awaitingBrief: Map<string, BlockInputs>;
   /** Blocks the pending set has held. */
-  total: number;
+  blocksTotal: number;
   /** Blocks landed, failed ones included. */
-  landed: number;
+  blocksLanded: number;
   /** Blocks failed since the run started or the last retry. */
-  failed: number;
+  blocksFailed: number;
 }
 
 export function createTwain(deps: TwainDeps): Twain {
@@ -135,17 +135,17 @@ export function createTwain(deps: TwainDeps): Twain {
   let quietTimer: unknown;
   let run: Run | undefined;
   /** Blocks failed since the last retry, out of the Blocks of the runs that ended since then. */
-  let failures = { count: 0, total: 0 };
+  let failuresSinceRetry = { count: 0, total: 0 };
   let status: Status = { kind: "idle" };
   const statusListeners: ((status: Status) => void)[] = [];
   const runEndListeners: ((event: RunEnd) => void)[] = [];
 
   function currentStatus(): Status {
     if (run) {
-      if (run.landed === 0 && run.awaitingBrief.size > 0) return { kind: "preparing" };
-      return { kind: "translating", landed: run.landed, total: run.total };
+      if (run.blocksLanded === 0 && run.awaitingBrief.size > 0) return { kind: "preparing" };
+      return { kind: "translating", landed: run.blocksLanded, total: run.blocksTotal };
     }
-    if (failures.count > 0) return { kind: "someFailed", ...failures };
+    if (failuresSinceRetry.count > 0) return { kind: "someFailed", ...failuresSinceRetry };
     return { kind: "idle" };
   }
 
@@ -160,8 +160,8 @@ export function createTwain(deps: TwainDeps): Twain {
   /** A retry's part in the core: forgets which Blocks failed. */
   function clearFailures(): void {
     failed.clear();
-    failures = { count: 0, total: 0 };
-    if (run) run.failed = 0;
+    failuresSinceRetry = { count: 0, total: 0 };
+    if (run) run.blocksFailed = 0;
   }
 
   /** Until a document's brief lands, `context` is undefined and every Block is a miss. */
@@ -210,9 +210,9 @@ export function createTwain(deps: TwainDeps): Twain {
       queue: [],
       inFlight: 0,
       awaitingBrief: new Map(),
-      total: 0,
-      landed: 0,
-      failed: 0,
+      blocksTotal: 0,
+      blocksLanded: 0,
+      blocksFailed: 0,
     };
     return run;
   }
@@ -224,7 +224,7 @@ export function createTwain(deps: TwainDeps): Twain {
       .filter(({ cacheKey }) => !cache.has(cacheKey) && !failed.has(cacheKey) && !run?.pending.has(cacheKey));
     if (fresh.length === 0) return;
     const current = currentRun();
-    current.total += fresh.length;
+    current.blocksTotal += fresh.length;
     for (const miss of fresh) current.pending.add(miss.cacheKey);
     for (const batch of packBatches(fresh)) current.queue.push(() => dispatchBatch(current, batch));
   }
@@ -255,11 +255,15 @@ export function createTwain(deps: TwainDeps): Twain {
       return;
     }
     run = undefined;
-    failures.total += current.total;
+    failuresSinceRetry.total += current.blocksTotal;
     deps.refresh();
     updateStatus();
-    if (current.failed > 0) {
-      const event: RunEnd = { kind: "finishedWithFailures", count: current.failed, total: current.total };
+    if (current.blocksFailed > 0) {
+      const event: RunEnd = {
+        kind: "finishedWithFailures",
+        count: current.blocksFailed,
+        total: current.blocksTotal,
+      };
       for (const listener of runEndListeners) listener(event);
     }
   }
@@ -340,11 +344,11 @@ export function createTwain(deps: TwainDeps): Twain {
       } else {
         if (segments) deps.log.error(`A Block came back empty (${context.url}, model ${context.model})`);
         failed.add(miss.cacheKey);
-        current.failed++;
-        failures.count++;
+        current.blocksFailed++;
+        failuresSinceRetry.count++;
       }
       current.pending.delete(miss.cacheKey);
-      current.landed++;
+      current.blocksLanded++;
     });
     landed(current);
   }

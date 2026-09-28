@@ -49,6 +49,7 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
     if (selected) setDisplayMode(selected.mode);
   };
 
+  // Between the language mode item (100.1) and `status.editor.info` (100).
   const statusItem = vscode.window.createStatusBarItem(
     "markdownTwain.status",
     vscode.StatusBarAlignment.Right,
@@ -81,22 +82,21 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
   twain.onStatusChange(showStatus);
   showStatus(twain.status);
 
-  twain.onRunEnd(async (event) => {
-    const selected = await vscode.window.showWarningMessage(
-      `${event.count} of ${blocks(event.total)} couldn't be translated.`,
-      "Retry",
-      "Show Log",
-    );
-    if (selected === "Retry") twain.retry();
-    if (selected === "Show Log") log.show();
-  });
-  const statusActions = async () => {
-    const selected = await vscode.window.showQuickPick(["Retry", "Show Log"], {
-      placeHolder: "markdown-twain",
-    });
+  const failureActions = ["Retry", "Show Log"] as const;
+  const runFailureAction = (selected: string | undefined) => {
     if (selected === "Retry") twain.retry();
     if (selected === "Show Log") log.show();
   };
+  twain.onRunEnd(async (event) => {
+    runFailureAction(
+      await vscode.window.showWarningMessage(
+        `${event.count} of ${blocks(event.total)} couldn't be translated.`,
+        ...failureActions,
+      ),
+    );
+  });
+  const statusActions = async () =>
+    runFailureAction(await vscode.window.showQuickPick(failureActions, { placeHolder: "markdown-twain" }));
 
   context.subscriptions.push(
     log,
