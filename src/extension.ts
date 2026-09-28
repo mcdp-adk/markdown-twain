@@ -5,7 +5,7 @@ import type { MarkdownIt } from "markdown-it";
 import * as vscode from "vscode";
 import type { ReasoningEffort } from "./core/providers.ts";
 import type { Settings } from "./core/request.ts";
-import { createTwain, type DisplayMode } from "./core/twain.ts";
+import { createTwain, type DisplayMode, type Status } from "./core/twain.ts";
 
 export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(md: MarkdownIt): MarkdownIt } {
   const log = vscode.window.createOutputChannel("markdown-twain", { log: true });
@@ -49,8 +49,59 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
     if (selected) setDisplayMode(selected.mode);
   };
 
+  const statusItem = vscode.window.createStatusBarItem(
+    "markdownTwain.status",
+    vscode.StatusBarAlignment.Right,
+    100.05,
+  );
+  statusItem.name = "markdown-twain";
+  const showStatus = (status: Status) => {
+    switch (status.kind) {
+      case "idle":
+        statusItem.hide();
+        return;
+      case "preparing":
+        statusItem.text = "$(sync~spin) Preparing…";
+        statusItem.tooltip = undefined;
+        statusItem.command = "markdownTwain.showLog";
+        break;
+      case "translating":
+        statusItem.text = `$(sync~spin) ${status.landed}/${status.total}`;
+        statusItem.tooltip = `Translating… ${status.landed} of ${blocks(status.total)}`;
+        statusItem.command = "markdownTwain.showLog";
+        break;
+      case "someFailed":
+        statusItem.text = `$(warning) ${status.count}`;
+        statusItem.tooltip = `${blocks(status.count)} couldn't be translated since the last retry`;
+        statusItem.command = "markdownTwain.statusActions";
+        break;
+    }
+    statusItem.show();
+  };
+  twain.onStatusChange(showStatus);
+  showStatus(twain.status);
+
+  twain.onRunEnd(async (event) => {
+    const selected = await vscode.window.showWarningMessage(
+      `${event.count} of ${blocks(event.total)} couldn't be translated.`,
+      "Retry",
+      "Show Log",
+    );
+    if (selected === "Retry") twain.retry();
+    if (selected === "Show Log") log.show();
+  });
+  const statusActions = async () => {
+    const selected = await vscode.window.showQuickPick(["Retry", "Show Log"], {
+      placeHolder: "markdown-twain",
+    });
+    if (selected === "Retry") twain.retry();
+    if (selected === "Show Log") log.show();
+  };
+
   context.subscriptions.push(
     log,
+    statusItem,
+    vscode.commands.registerCommand("markdownTwain.statusActions", statusActions),
     vscode.commands.registerCommand("markdownTwain.pickDisplayMode", pickDisplayMode),
     vscode.commands.registerCommand("markdownTwain.pickDisplayMode.originalOnly", pickDisplayMode),
     vscode.commands.registerCommand("markdownTwain.pickDisplayMode.bilingual", pickDisplayMode),
@@ -70,6 +121,10 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
 }
 
 export function deactivate(): void {}
+
+function blocks(count: number): string {
+  return count === 1 ? "1 Block" : `${count} Blocks`;
+}
 
 function readSettings(): Settings {
   const config = vscode.workspace.getConfiguration("markdownTwain");
