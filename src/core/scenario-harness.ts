@@ -7,7 +7,7 @@ import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from "markdown-it";
 import frontMatter from "markdown-it-front-matter";
 import { vi } from "vitest";
 import type { Settings } from "./request.ts";
-import { createTwain, type DisplayMode } from "./twain.ts";
+import { createTwain, type DisplayMode, type RunEnd, type Status } from "./twain.ts";
 
 export { QUIET_MS } from "./twain.ts";
 export const LATENCY_MS = 100;
@@ -172,10 +172,18 @@ export function scenario(options: ScenarioOptions = {}) {
   };
   const md = twain.markdownItPlugin(newMarkdownIt());
   const plain = newMarkdownIt();
+  const statuses: Status[] = [];
+  const runEnds: RunEnd[] = [];
+  twain.onStatusChange((status) => statuses.push(status));
+  twain.onRunEnd((event) => runEnds.push(event));
 
   return {
     twain,
     settings,
+    /** Every status the core changed to, in order. */
+    statuses,
+    /** Every run-end event, in order. */
+    runEnds,
     /** Every request, in the order it was sent. */
     requests,
     /** The translation requests, in the order they were sent. */
@@ -202,6 +210,7 @@ export function scenario(options: ScenarioOptions = {}) {
     /** What the preview shows without the extension. */
     plainRender: (text: string) => plain.render(text),
     setDisplayMode: (mode: DisplayMode) => twain.setDisplayMode(mode),
+    retry: () => twain.retry(),
     /** Advances fake time, letting timers and the promises they start run. */
     advance: (ms: number) => vi.advanceTimersByTimeAsync(ms),
     /** Runs every pending timer, so the whole run finishes. */
