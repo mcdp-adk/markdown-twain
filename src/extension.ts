@@ -13,6 +13,14 @@ import {
 import type { Settings } from "./core/request.ts";
 import { createTwain, type DisplayMode, type Status, type Twain } from "./core/twain.ts";
 
+const FIX_ACTIONS = {
+  setUpConnection: ["Set Up LLM Connection", "markdownTwain.setUpConnection"],
+  setApiKey: ["Set API Key", "markdownTwain.setApiKey"],
+  selectModel: ["Select Model", "markdownTwain.selectModel"],
+  setReasoningEffort: ["Set Reasoning Effort", "markdownTwain.setReasoningEffort"],
+  openTargetLanguageSetting: ["Open Setting", "markdownTwain.openTargetLanguageSetting"],
+} as const;
+
 export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(md: MarkdownIt): MarkdownIt } {
   const log = vscode.window.createOutputChannel("markdown-twain", { log: true });
 
@@ -64,6 +72,7 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
   );
   statusItem.name = "markdown-twain";
   const showStatus = (status: Status) => {
+    statusItem.backgroundColor = undefined;
     switch (status.kind) {
       case "idle":
         statusItem.hide();
@@ -78,6 +87,12 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
         statusItem.tooltip = `Translating… ${status.landed} of ${blocks(status.total)}`;
         statusItem.command = "markdownTwain.showLog";
         break;
+      case "halted":
+        statusItem.text = "$(error) Translation stopped";
+        statusItem.tooltip = status.error.message;
+        statusItem.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+        statusItem.command = "markdownTwain.statusActions";
+        break;
       case "someFailed":
         statusItem.text = `$(warning) ${status.count}`;
         statusItem.tooltip = `${blocks(status.count)} couldn't be translated since the last retry`;
@@ -90,11 +105,21 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
   showStatus(twain.status);
 
   const failureActions = ["Retry", "Show Log"] as const;
-  const runFailureAction = (selected: string | undefined) => {
+  const runFailureAction = (
+    selected: string | undefined,
+    fix?: (typeof FIX_ACTIONS)[keyof typeof FIX_ACTIONS],
+  ) => {
     if (selected === "Retry") twain.retry();
     if (selected === "Show Log") log.show();
+    if (fix && selected === fix[0]) void vscode.commands.executeCommand(fix[1]);
   };
   twain.onRunEnd(async (event) => {
+    if (event.kind === "halted") {
+      const fix = event.error.fix ? FIX_ACTIONS[event.error.fix] : undefined;
+      const actions = fix ? [fix[0], "Retry"] : ["Retry"];
+      runFailureAction(await vscode.window.showErrorMessage(event.error.message, ...actions), fix);
+      return;
+    }
     runFailureAction(
       await vscode.window.showWarningMessage(
         `${event.count} of ${blocks(event.total)} couldn't be translated.`,
@@ -102,8 +127,12 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
       ),
     );
   });
-  const statusActions = async () =>
-    runFailureAction(await vscode.window.showQuickPick(failureActions, { placeHolder: "markdown-twain" }));
+  const statusActions = async () => {
+    const status = twain.status;
+    const fix = status.kind === "halted" && status.error.fix ? FIX_ACTIONS[status.error.fix] : undefined;
+    const actions = fix ? ["Retry", fix[0], "Show Log"] : failureActions;
+    runFailureAction(await vscode.window.showQuickPick(actions, { placeHolder: "markdown-twain" }), fix);
+  };
 
   context.subscriptions.push(
     log,
@@ -251,15 +280,7 @@ function connectionCommands(context: vscode.ExtensionContext, twain: Twain) {
       );
     } catch (error) {
       const failure = twain.classifyConnectionError(error, settings);
-      const fix = failure.fix
-        ? {
-            setUpConnection: ["Set Up LLM Connection", "markdownTwain.setUpConnection"],
-            setApiKey: ["Set API Key", "markdownTwain.setApiKey"],
-            selectModel: ["Select Model", "markdownTwain.selectModel"],
-            setReasoningEffort: ["Set Reasoning Effort", "markdownTwain.setReasoningEffort"],
-            openTargetLanguageSetting: ["Open Setting", "markdownTwain.openTargetLanguageSetting"],
-          }[failure.fix]
-        : undefined;
+      const fix = failure.fix ? FIX_ACTIONS[failure.fix] : undefined;
       const selected = fix
         ? await vscode.window.showErrorMessage(failure.message, fix[0])
         : await vscode.window.showErrorMessage(failure.message);

@@ -546,32 +546,47 @@ describe("scenario 6: Document brief", () => {
     expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
   });
 
-  it("is handled like any other failed request when it fails", async () => {
+  it("halts the run when the Document brief request fails after retries", async () => {
+    let failBrief = true;
     const s = scenario({
       secrets: { "apiKey.openrouter": "sk-very-secret" },
-      briefReply: () => ({ status: 500, body: { error: { message: "Upstream error" } } }),
+      briefReply: () =>
+        failBrief
+          ? { status: 500, body: { error: { message: "Upstream error" } } }
+          : { content: "A brief of the document.\nKey terms: none." },
     });
     s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     s.render(DOC, doc);
     await s.settle();
 
-    expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief", "brief", "brief"]);
     expect(s.refreshes - refreshesBefore).toBe(1);
     const log = s.logLines.join("\n");
     expect(log).toContain("Document brief request failed: 500 Upstream error");
+    expect(log).toContain("6 Blocks");
+    expect(s.twain.status).toEqual({ kind: "halted", error: { message: "Upstream error" } });
+    expect(s.runEnds).toEqual([{ kind: "halted", error: { message: "Upstream error" } }]);
     expect(log).not.toContain("sk-very-secret");
 
     // The refresh render shows the source and sends nothing more.
     expect(s.render(DOC, doc)).toBe(s.plainRender(doc));
     await s.settle();
-    expect(s.requests).toHaveLength(1);
+    expect(s.requests).toHaveLength(3);
 
     // A retry asks for the brief again.
+    failBrief = false;
     s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
-    expect(s.requests.map((request) => request.kind)).toEqual(["brief", "brief"]);
+    expect(s.requests.map((request) => request.kind)).toEqual([
+      "brief",
+      "brief",
+      "brief",
+      "brief",
+      "translation",
+      "translation",
+    ]);
   });
 
   it("isn't regenerated when the document is edited", async () => {
@@ -839,11 +854,15 @@ describe("requests", () => {
   });
 });
 
-describe("interim failure handling", () => {
-  it("logs a failed request without the key, renders the Block as source, and doesn't resend it until a mode is picked", async () => {
+describe("request failure handling", () => {
+  it("halts on a non-retryable request error, then retries when a translated mode is picked", async () => {
+    let attempts = 0;
     const s = scenario({
       secrets: { "apiKey.openrouter": "sk-very-secret" },
-      reply: () => ({ status: 401, body: { error: { message: "No auth credentials found" } } }),
+      reply: () =>
+        attempts++ === 0
+          ? { status: 401, body: { error: { message: "No auth credentials found" } } }
+          : { content: "译 Hello." },
     });
     s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
@@ -857,16 +876,25 @@ describe("interim failure handling", () => {
     expect(s.logLines.join("\n")).not.toContain("sk-very-secret");
     expect(s.logLines.join("\n")).not.toContain("Authorization");
 
-    // The refresh render doesn't record the failed Block as a miss.
+    expect(s.twain.status).toEqual({
+      kind: "halted",
+      error: { message: "No auth credentials found", fix: "setApiKey" },
+    });
+    expect(s.runEnds).toEqual([
+      { kind: "halted", error: { message: "No auth credentials found", fix: "setApiKey" } },
+    ]);
+
+    // Renders while halted remember misses but don't dispatch them.
     expect(s.render(DOC, "Hello.\n")).toBe(s.plainRender("Hello.\n"));
     await s.settle();
     expect(s.sent).toHaveLength(1);
 
-    // Picking a translated mode clears the failed set.
+    // Picking a translated mode clears the halt and lets the next render retry.
     s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
     expect(s.sent).toHaveLength(2);
+    expect(s.twain.status).toEqual({ kind: "idle" });
   });
 
   it("treats an empty translation as a failure", async () => {
@@ -945,5 +973,219 @@ describe("interim failure handling", () => {
 
     expect(s.requests).toHaveLength(0);
     expect(s.render(DOC, "Hello.\n")).toBe(s.plainRender("Hello.\n"));
+  });
+});
+
+describe("retry and halted runs", () => {
+  it("honors Retry-After on a 429 before retrying", async () => {
+    let attempts = 0;
+    const s = scenario({
+      reply: () =>
+        attempts++ === 0
+          ? {
+              status: 429,
+              body: { error: { message: "Rate limited" } },
+              headers: { "Retry-After": "2" },
+            }
+          : { content: "译 Hello." },
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.advance(QUIET_MS + LATENCY_MS);
+
+    expect(s.sent).toHaveLength(1);
+    await s.advance(1_999);
+    expect(s.sent).toHaveLength(1);
+    await s.advance(1 + LATENCY_MS);
+
+    expect(s.sent).toHaveLength(2);
+    await s.settle();
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    expect(s.render(DOC, "Hello.\n")).toContain('<div class="twain-t">译 Hello.</div>');
+    expect(s.runEnds).toEqual([]);
+  });
+
+  it("halts when Retry-After exceeds 30 seconds", async () => {
+    const s = scenario({
+      reply: () => ({
+        status: 429,
+        body: { error: { message: "Rate limited" } },
+        headers: { "Retry-After": "31" },
+      }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+
+    expect(s.sent).toHaveLength(1);
+    expect(s.twain.status).toEqual({ kind: "halted", error: { message: "Rate limited" } });
+    expect(s.runEnds).toEqual([{ kind: "halted", error: { message: "Rate limited" } }]);
+  });
+
+  it("halts once on a 401 and exposes the classified fix", async () => {
+    const s = scenario({
+      reply: () => ({ status: 401, body: { error: { message: "No auth credentials found" } } }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+
+    expect(s.sent).toHaveLength(1);
+    expect(s.twain.status).toEqual({
+      kind: "halted",
+      error: { message: "No auth credentials found", fix: "setApiKey" },
+    });
+    expect(s.runEnds).toEqual([
+      { kind: "halted", error: { message: "No auth credentials found", fix: "setApiKey" } },
+    ]);
+  });
+
+  it("aborts in-flight requests and leaves queued Blocks unsent after a 401", async () => {
+    const doc = Array.from({ length: 20 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n");
+    const s = scenario({
+      reply: () => ({ status: 401, body: { error: { message: "Bad credentials" } } }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.settle();
+
+    expect(s.sent).toHaveLength(4);
+    expect(s.aborted).toBeGreaterThan(0);
+    expect(s.runEnds).toHaveLength(1);
+    expect(s.twain.status.kind).toBe("halted");
+    s.render(DOC, doc);
+    await s.settle();
+    expect(s.sent).toHaveLength(4);
+  });
+
+  it("offers Select Model when the provider rejects an unknown model with 400", async () => {
+    const s = scenario({
+      settings: { model: "missing-model", reasoningEffort: "low" },
+      briefReply: () => ({
+        status: 400,
+        body: { error: { message: "missing-model is not a valid model ID" } },
+      }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+
+    expect(s.twain.status).toEqual({
+      kind: "halted",
+      error: { message: "missing-model is not a valid model ID", fix: "selectModel" },
+    });
+  });
+
+  it("halts when the Document brief fails and sends no translations", async () => {
+    const s = scenario({
+      briefReply: () => ({ status: 401, body: { error: { message: "Bad credentials" } } }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "First.\n\nSecond.\n");
+    await s.settle();
+
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
+    expect(s.twain.status).toEqual({
+      kind: "halted",
+      error: { message: "Bad credentials", fix: "setApiKey" },
+    });
+    expect(s.runEnds).toEqual([{ kind: "halted", error: { message: "Bad credentials", fix: "setApiKey" } }]);
+  });
+
+  it("times out a hung request after 120 seconds and retries it twice", async () => {
+    const s = scenario({ latencyMs: 10 * 60_000 });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief", "brief", "brief"]);
+    expect(s.aborted).toBe(3);
+    expect(s.twain.status.kind).toBe("halted");
+    if (s.twain.status.kind === "halted") {
+      expect(s.twain.status.error.message).toContain("120 seconds");
+    }
+    expect(s.runEnds).toHaveLength(1);
+    expect(s.runEnds[0].kind).toBe("halted");
+  });
+
+  it("resumes a halted run after Test Connection and retries only unlanded Blocks", async () => {
+    let attempts = 0;
+    const doc = Array.from({ length: 5 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n");
+    const s = scenario({
+      reply: (request) => {
+        attempts++;
+        if (attempts === 1) return { content: joinSegments(request.blocks.map(fakeTranslation)) };
+        if (attempts === 2) return { status: 401, body: { error: { message: "Bad credentials" } } };
+        return { content: joinSegments(request.blocks.map(fakeTranslation)) };
+      },
+      connectionFetch: () =>
+        new Response("data: ping\n\n", { headers: { "Content-Type": "text/event-stream" } }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.settle();
+
+    expect(s.twain.status.kind).toBe("halted");
+    await s.twain.testConnection(s.settings);
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    s.render(DOC, doc);
+    await s.settle();
+
+    expect(s.sent.map((request) => request.blocks)).toEqual([
+      ["Paragraph 1.", "Paragraph 2.", "Paragraph 3.", "Paragraph 4."],
+      ["Paragraph 5."],
+      ["Paragraph 5."],
+    ]);
+    expect(s.runEnds).toEqual([{ kind: "halted", error: { message: "Bad credentials", fix: "setApiKey" } }]);
+    expect(s.twain.status).toEqual({ kind: "idle" });
+  });
+
+  it("retries empty Blocks after a successful Test Connection in a translated mode", async () => {
+    let attempts = 0;
+    const s = scenario({
+      reply: () => ({ content: attempts++ === 0 ? "" : "译 Hello." }),
+      connectionFetch: () =>
+        new Response("data: ping\n\n", { headers: { "Content-Type": "text/event-stream" } }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.twain.status).toEqual({ kind: "someFailed", count: 1, total: 1 });
+
+    await s.twain.testConnection(s.settings);
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.sent).toHaveLength(2);
+    expect(s.render(DOC, "Hello.\n")).toContain('<div class="twain-t">译 Hello.</div>');
+  });
+
+  it("never writes the API key or headers to the log", async () => {
+    const secret = "sk-secret-value";
+    const s = scenario({
+      settings: {
+        provider: "custom",
+        customBaseUrl: "https://llm.example/v1",
+        model: "private/model-id",
+      },
+      secrets: { "apiKey.custom": secret },
+      reply: () => ({
+        status: 401,
+        body: { error: { message: `Rejected credential ${secret}` } },
+      }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+
+    const log = s.logLines.join("\n");
+    expect(log).toContain("401");
+    expect(log).toContain("https://llm.example/v1/chat/completions");
+    expect(log).toContain("private/model-id");
+    expect(log).not.toContain(secret);
+    expect(log).not.toContain("Authorization");
+    expect(log).not.toContain("Bearer");
+    expect(JSON.stringify(s.twain.status)).not.toContain(secret);
+    expect(JSON.stringify(s.runEnds)).not.toContain(secret);
   });
 });
