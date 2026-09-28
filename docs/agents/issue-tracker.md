@@ -5,7 +5,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
-- **Read an issue**: `gh issue view <number> --json title,body,labels,comments`. The plain `--comments` form can print nothing when its output isn't a terminal. For a long body such as the spec, redirect the JSON to a file and read the sections you need.
+- **Read an issue**: `gh issue view <number> --json title,body,labels,comments`. The plain `--comments` form can print nothing when its output isn't a terminal. For a long body such as the spec, redirect the JSON to a file outside the repository (the OS temp directory or the session's scratch directory, never the working tree) and read the sections you need.
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
