@@ -292,13 +292,12 @@ describe("scenario 5: sentinel and empty segments", () => {
   const ALREADY = "这一段已经是简体中文。";
   const EMPTY = "The model skips this one.";
   const doc = `First paragraph.\n\n${ALREADY}\n\n${EMPTY}\n`;
-  const reply = (request: SentRequest): Reply => ({
-    content: joinSegments(
-      request.blocks.map((block) =>
-        block === ALREADY ? SENTINEL : block === EMPTY ? "" : fakeTranslation(block),
-      ),
-    ),
-  });
+  const answer = (block: string): string => {
+    if (block === ALREADY) return SENTINEL;
+    if (block === EMPTY) return "";
+    return fakeTranslation(block);
+  };
+  const reply = (request: SentRequest): Reply => ({ content: joinSegments(request.blocks.map(answer)) });
 
   it("renders a sentinel Block as source in every mode and never requests it again", async () => {
     const s = scenario({ reply });
@@ -339,15 +338,26 @@ describe("scenario 5: sentinel and empty segments", () => {
     expect(s.sent.map((request) => request.blocks)).toEqual([["First paragraph.", ALREADY, EMPTY], [EMPTY]]);
   });
 
+  it("treats a sentinel answer to a single-Block request the same way", async () => {
+    const s = scenario({ reply });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, `${ALREADY}\n`);
+    await s.settle();
+
+    expect(s.render(DOC, `${ALREADY}\n`)).toBe(s.plainRender(`${ALREADY}\n`));
+    s.setDisplayMode("bilingual");
+    s.render(DOC, `${ALREADY}\n`);
+    await s.settle();
+    expect(s.sent).toHaveLength(1);
+  });
+
   it("fails a Block whose per-Block fallback comes back empty", async () => {
     const s = scenario({
-      reply: (request) => ({
+      reply: (request) => {
         // Batches lose their separators; on its own, the second Block comes back empty.
-        content:
-          request.blocks.length > 1
-            ? request.blocks.map(fakeTranslation).join("\n\n")
-            : request.input === "Second." ? "" : fakeTranslation(request.input),
-      }),
+        if (request.blocks.length > 1) return { content: request.blocks.map(fakeTranslation).join("\n\n") };
+        return { content: request.input === "Second." ? "" : fakeTranslation(request.input) };
+      },
     });
     s.setDisplayMode("bilingual");
     s.render(DOC, "First.\n\nSecond.\n");

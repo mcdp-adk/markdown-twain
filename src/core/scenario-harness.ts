@@ -30,12 +30,12 @@ export interface SentRequest {
 export type Reply = { status: number; body: unknown } | { content: string };
 
 export const USER_PREFIX = /^Translate to [^:\n]+:\n\n\n/;
-export const BATCH_SEPARATOR = "\n\n%%\n\n";
+export const BATCH_JOINER = "\n\n%%\n\n";
 export const SENTINEL = "{{NO_TRANSLATION_NEEDED}}";
 
 /** A batch answer: one segment per Block, joined the way the prompt asks. */
 export function joinSegments(segments: string[]): string {
-  return segments.join(BATCH_SEPARATOR);
+  return segments.join(BATCH_JOINER);
 }
 
 /** The fake model's translation: the input, marked, with its Markdown intact. */
@@ -86,7 +86,7 @@ export function scenario(options: ScenarioOptions = {}) {
       headers: init.headers as Record<string, string>,
       body,
       input,
-      blocks: input.split(BATCH_SEPARATOR),
+      blocks: input.split(BATCH_JOINER),
     };
     sent.push(request);
     inFlight++;

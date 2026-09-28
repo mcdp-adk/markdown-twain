@@ -2,9 +2,11 @@
 // shown. It never imports `vscode`; the adapter injects everything it needs.
 
 import type { MarkdownIt, Renderer, Token } from "markdown-it";
-import { BATCH_SEPARATOR, NO_TRANSLATION_SENTINEL } from "./prompt.ts";
+import { NO_TRANSLATION_SENTINEL } from "./prompt.ts";
 import {
   RequestError,
+  answerSegments,
+  batchInput,
   buildRequest,
   requestInput,
   send,
@@ -24,8 +26,6 @@ const MAX_IN_FLIGHT = 4;
 const MAX_BATCH_BLOCKS = 4;
 /** Characters of Block text per request, at most, unless a single Block is longer. */
 const MAX_BATCH_CHARS = 1000;
-/** A line holding only the batch separator, which splits a batch's answer into segments. */
-const SEPARATOR_LINE = new RegExp(`^[ \\t]*${BATCH_SEPARATOR}[ \\t]*\\r?$`, "m");
 
 export interface Clock {
   setTimeout(callback: () => void, ms: number): unknown;
@@ -139,13 +139,11 @@ export function createTwain(deps: TwainDeps): Twain {
     let segments: string[] | undefined;
     try {
       const apiKey = await resolveApiKey(context.keySource);
-      const input = batch.map((miss) => miss.input).join(`\n\n${BATCH_SEPARATOR}\n\n`);
+      const input = batchInput(batch.map((miss) => miss.input));
       const request = buildRequest(context, input, apiKey, current.controller.signal);
-      const text = await send(deps.fetch, request);
-      // A single Block's answer is its one segment, so its fallback can't mismatch again.
-      segments = batch.length === 1 ? [text] : text.split(SEPARATOR_LINE).map((part) => part.trim());
+      segments = answerSegments(await send(deps.fetch, request), batch.length);
     } catch (error) {
-      if (current === run) logFailure(error, batch);
+      if (current === run) logRequestFailure(error, context, batch.length);
     }
     // Aborted: late results are discarded.
     if (current !== run) return;
@@ -166,7 +164,7 @@ export function createTwain(deps: TwainDeps): Twain {
       } else if (segment) {
         cache.set(miss.cacheKey, { kind: "translation", text: segment });
       } else {
-        if (segments) logFailure(new RequestError(undefined, "The translation is empty."), [miss]);
+        if (segments) deps.log.error(`A Block came back empty (${context.url}, model ${context.model})`);
         failed.add(miss.cacheKey);
       }
       current.pending.delete(miss.cacheKey);
@@ -184,11 +182,10 @@ export function createTwain(deps: TwainDeps): Twain {
   }
 
   /** Logs the status, the provider's message, the base URL, and the model; never the key or headers. */
-  function logFailure(error: unknown, batch: Miss[]): void {
-    const { context } = batch[0];
+  function logRequestFailure(error: unknown, context: TranslationContext, blockCount: number): void {
     const status = error instanceof RequestError && error.status !== undefined ? `${error.status} ` : "";
     const message = error instanceof Error ? error.message : String(error);
-    const blocks = batch.length === 1 ? "1 Block" : `${batch.length} Blocks`;
+    const blocks = blockCount === 1 ? "1 Block" : `${blockCount} Blocks`;
     deps.log.error(
       `Translation request failed: ${status}${message} (${blocks}, ${context.url}, model ${context.model})`,
     );
