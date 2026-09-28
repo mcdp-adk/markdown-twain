@@ -42,9 +42,23 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
 
   const mirrorDisplayMode = () =>
     void vscode.commands.executeCommand("setContext", "markdownTwain.displayMode", twain.displayMode);
-  const setDisplayMode = (mode: DisplayMode) => {
-    twain.setDisplayMode(mode);
+  const runFailureAction = (
+    selected: string | undefined,
+    fix?: (typeof FIX_ACTIONS)[keyof typeof FIX_ACTIONS],
+  ) => {
+    if (selected === "Retry") twain.retry();
+    if (selected === "Show Log") log.show();
+    if (fix && selected === fix[0]) void vscode.commands.executeCommand(fix[1]);
+  };
+  const showFailure = async (error: { message: string; fix?: keyof typeof FIX_ACTIONS }, retry = false) => {
+    const fix = error.fix ? FIX_ACTIONS[error.fix] : undefined;
+    const actions = [...(fix ? [fix[0]] : []), ...(retry ? ["Retry"] : [])];
+    runFailureAction(await vscode.window.showErrorMessage(error.message, ...actions), fix);
+  };
+  const setDisplayMode = async (mode: DisplayMode) => {
+    const failure = await twain.setDisplayMode(mode);
     mirrorDisplayMode();
+    if (failure) await showFailure(failure);
   };
   const pickDisplayMode = async () => {
     const modes: { label: string; mode: DisplayMode }[] = [
@@ -60,7 +74,7 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
       })),
       { placeHolder: "Pick Display Mode" },
     );
-    if (selected) setDisplayMode(selected.mode);
+    if (selected) await setDisplayMode(selected.mode);
   };
   const connection = connectionCommands(context, twain);
 
@@ -105,19 +119,9 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
   showStatus(twain.status);
 
   const failureActions = ["Retry", "Show Log"] as const;
-  const runFailureAction = (
-    selected: string | undefined,
-    fix?: (typeof FIX_ACTIONS)[keyof typeof FIX_ACTIONS],
-  ) => {
-    if (selected === "Retry") twain.retry();
-    if (selected === "Show Log") log.show();
-    if (fix && selected === fix[0]) void vscode.commands.executeCommand(fix[1]);
-  };
   twain.onRunEnd(async (event) => {
     if (event.kind === "halted") {
-      const fix = event.error.fix ? FIX_ACTIONS[event.error.fix] : undefined;
-      const actions = fix ? [fix[0], "Retry"] : ["Retry"];
-      runFailureAction(await vscode.window.showErrorMessage(event.error.message, ...actions), fix);
+      await showFailure(event.error, true);
       return;
     }
     runFailureAction(

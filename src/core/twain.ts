@@ -11,7 +11,12 @@ import {
   testConnection,
 } from "./connection.ts";
 import { NO_TRANSLATION_SENTINEL } from "./prompt.ts";
-import type { ReasoningEffort } from "./providers.ts";
+import {
+  CUSTOM_PROVIDER_ID,
+  PROVIDER_PRESETS,
+  providerConnection,
+  type ReasoningEffort,
+} from "./providers.ts";
 import {
   answerSegments,
   batchInput,
@@ -25,8 +30,14 @@ import {
   type TranslationContext,
   translationContext,
 } from "./request.ts";
+import { resolveTargetLanguage } from "./target-language.ts";
 
 export type DisplayMode = "originalOnly" | "bilingual" | "translationOnly";
+export type PreflightFailure =
+  | { kind: "notSetUp"; message: string; fix: "setUpConnection" }
+  | { kind: "noKey"; message: string; fix: "setApiKey" }
+  | { kind: "unsupportedDisplayLanguage"; message: string; fix: "openTargetLanguageSetting" };
+type RunError = ReturnType<typeof classifyConnectionError> | PreflightFailure;
 
 /** How long after the last render the latest misses are sent. */
 export const QUIET_MS = 1000;
@@ -73,18 +84,18 @@ export type Status =
   | { kind: "idle" }
   | { kind: "preparing" }
   | { kind: "translating"; landed: number; total: number }
-  | { kind: "halted"; error: ReturnType<typeof classifyConnectionError> }
+  | { kind: "halted"; error: RunError }
   | { kind: "someFailed"; count: number; total: number };
 
 /** Fired at most once per run, when it ends. */
 export type RunEnd =
-  | { kind: "halted"; error: ReturnType<typeof classifyConnectionError> }
+  | { kind: "halted"; error: RunError }
   | { kind: "finishedWithFailures"; count: number; total: number };
 
 export interface Twain {
   /** The plugin for the built-in preview's markdown-it, through `extendMarkdownIt`. */
   markdownItPlugin(md: MarkdownIt): MarkdownIt;
-  setDisplayMode(mode: DisplayMode): void;
+  setDisplayMode(mode: DisplayMode): Promise<PreflightFailure | undefined>;
   /** Restarts translation after a markdownTwain setting changes. */
   settingsChanged(): void;
   readonly displayMode: DisplayMode;
@@ -158,7 +169,8 @@ export function createTwain(deps: TwainDeps): Twain {
   let run: Run | undefined;
   /** Blocks failed since the last retry, out of the Blocks of the runs that ended since then. */
   let failuresSinceRetry = { count: 0, total: 0 };
-  let halted: ReturnType<typeof classifyConnectionError> | undefined;
+  let halted: RunError | undefined;
+  let modePickVersion = 0;
   let status: Status = { kind: "idle" };
   const statusListeners: ((status: Status) => void)[] = [];
   const runEndListeners: ((event: RunEnd) => void)[] = [];
@@ -187,6 +199,53 @@ export function createTwain(deps: TwainDeps): Twain {
     failuresSinceRetry = { count: 0, total: 0 };
     halted = undefined;
     if (run) run.blocksFailed = 0;
+  }
+
+  /** Resolve the key once for both validation and the request that follows it. */
+  async function preflight(settings: Settings): Promise<{ apiKey?: string; failure?: PreflightFailure }> {
+    const connection = providerConnection(settings);
+    if (
+      !settings.model.trim() ||
+      !connection ||
+      (settings.provider === CUSTOM_PROVIDER_ID && !settings.customBaseUrl.trim())
+    ) {
+      return { failure: { kind: "notSetUp", message: "No LLM connection set up.", fix: "setUpConnection" } };
+    }
+    const apiKey = await resolveApiKey(deps.secret, deps.env, {
+      secretName: connection.secretName,
+      envVar: connection.envVar,
+    });
+    if (!apiKey && settings.provider !== CUSTOM_PROVIDER_ID) {
+      const label = PROVIDER_PRESETS.find((preset) => preset.id === settings.provider)?.label;
+      return { failure: { kind: "noKey", message: `No API key for ${label}.`, fix: "setApiKey" } };
+    }
+    const language = resolveTargetLanguage(settings.targetLanguage, settings.displayLanguage);
+    if (!language.ok) {
+      const message =
+        settings.targetLanguage === "auto"
+          ? `VS Code's display language "${language.tag}" isn't in the Target language list.`
+          : `Target language "${language.tag}" isn't in the Target language list.`;
+      return { failure: { kind: "unsupportedDisplayLanguage", message, fix: "openTargetLanguageSetting" } };
+    }
+    return { apiKey };
+  }
+
+  /** Validate the live settings before sending; changed settings need a fresh render. */
+  async function dispatchPreflight(current: Run, expectedSettings: Settings) {
+    const settings = deps.settings();
+    const check = await preflight(settings);
+    if (current !== run) return;
+    if (check.failure) {
+      haltRun(current, check.failure);
+      return;
+    }
+    if (JSON.stringify(settings) !== JSON.stringify(expectedSettings)) {
+      abortRun();
+      deps.refresh();
+      updateStatus();
+      return;
+    }
+    return check;
   }
 
   /** Until a document's brief lands, `context` is undefined and every Block is a miss. */
@@ -306,14 +365,14 @@ export function createTwain(deps: TwainDeps): Twain {
   async function dispatchBrief(current: Run, render: DocumentRender): Promise<void> {
     let brief: string;
     try {
+      const check = await dispatchPreflight(current, render.settings);
+      if (!check) return;
       const text = deps.readDocument(render.uri);
       if (text === undefined) throw new Error("The document's text can't be read");
-      const apiKey = await resolveApiKey(deps.secret, deps.env, render.base.keySource);
-      if (current !== run) return;
       const input = text.slice(0, BRIEF_INPUT_CHARS);
       brief = await send(
         deps.fetch,
-        buildBriefRequest(render.base, input, apiKey, current.controller.signal),
+        buildBriefRequest(render.base, input, check.apiKey, current.controller.signal),
       );
     } catch (error) {
       if (current === run) {
@@ -324,7 +383,10 @@ export function createTwain(deps: TwainDeps): Twain {
           render.base,
           covered === 1 ? "1 Block" : `${covered} Blocks`,
         );
-        haltRun(current, error, render.settings);
+        haltRun(
+          current,
+          classifyConnectionError(error, render.settings, render.settings.reasoningEffort !== "default"),
+        );
       }
       return;
     }
@@ -352,10 +414,10 @@ export function createTwain(deps: TwainDeps): Twain {
     const { context, settings } = batch[0];
     let segments: string[] | undefined;
     try {
-      const apiKey = await resolveApiKey(deps.secret, deps.env, context.keySource);
-      if (current !== run) return;
+      const check = await dispatchPreflight(current, settings);
+      if (!check) return;
       const input = batchInput(batch.map((miss) => miss.input));
-      const request = buildRequest(context, input, apiKey, current.controller.signal);
+      const request = buildRequest(context, input, check.apiKey, current.controller.signal);
       segments = answerSegments(await send(deps.fetch, request), batch.length);
     } catch (error) {
       if (current === run) {
@@ -365,7 +427,7 @@ export function createTwain(deps: TwainDeps): Twain {
           context,
           batch.length === 1 ? "1 Block" : `${batch.length} Blocks`,
         );
-        haltRun(current, error, settings);
+        haltRun(current, classifyConnectionError(error, settings, settings.reasoningEffort !== "default"));
       }
       return;
     }
@@ -414,9 +476,8 @@ export function createTwain(deps: TwainDeps): Twain {
     );
   }
 
-  function haltRun(current: Run, error: unknown, settings: Settings): void {
+  function haltRun(current: Run, classified: RunError): void {
     if (current !== run) return;
-    const classified = classifyConnectionError(error, settings, settings.reasoningEffort !== "default");
     halted = classified;
     run = undefined;
     stopQuietPeriod();
@@ -521,7 +582,22 @@ export function createTwain(deps: TwainDeps): Twain {
       return elapsed;
     },
     classifyConnectionError,
-    setDisplayMode(next) {
+    async setDisplayMode(next) {
+      const version = ++modePickVersion;
+      if (next !== "originalOnly") {
+        const check = await preflight(deps.settings());
+        if (version !== modePickVersion) return;
+        if (check.failure) {
+          if (mode !== "originalOnly") {
+            abortRun();
+            clearFailures();
+            mode = "originalOnly";
+            deps.refresh();
+            updateStatus();
+          }
+          return check.failure;
+        }
+      }
       if (next === "originalOnly") abortRun();
       clearFailures();
       mode = next;
@@ -529,6 +605,7 @@ export function createTwain(deps: TwainDeps): Twain {
       updateStatus();
     },
     settingsChanged() {
+      modePickVersion++;
       abortRun();
       clearFailures();
       if (mode !== "originalOnly") deps.refresh();
