@@ -728,6 +728,38 @@ describe("scenario 6: Document brief", () => {
     ]);
   });
 
+  it("halts on an empty Document brief and translates after Retry", async () => {
+    let emptyBrief = true;
+    const s = scenario({
+      briefReply: () =>
+        emptyBrief ? { content: " \n\t " } : { content: "A brief of the document.\nKey terms: none." },
+    });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.settle();
+
+    const error = { message: "Document brief came back empty. Retry translation." };
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
+    expect(s.twain.status).toEqual({ kind: "halted", error });
+    expect(s.runEnds).toEqual([{ kind: "halted", error }]);
+    expect(s.logLines.join("\n")).not.toContain("http.proxy");
+    expect(s.render(DOC, doc)).toBe(s.plainRender(doc));
+    await s.settle();
+    expect(s.requests).toHaveLength(1);
+
+    emptyBrief = false;
+    s.retry();
+    s.render(DOC, doc);
+    await s.settle();
+    expect(s.requests.map((request) => request.kind)).toEqual([
+      "brief",
+      "brief",
+      "translation",
+      "translation",
+    ]);
+    expect(s.render(DOC, doc)).toContain('<div class="twain-t">译 Paragraph 6.</div>');
+  });
+
   it("isn't regenerated when the document is edited", async () => {
     const s = scenario();
     await s.setDisplayMode("bilingual");

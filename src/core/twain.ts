@@ -39,6 +39,8 @@ export type PreflightFailure =
   | { kind: "unsupportedDisplayLanguage"; message: string; fix: "openTargetLanguageSetting" };
 type RunError = ReturnType<typeof classifyConnectionError> | PreflightFailure;
 
+class EmptyBriefError extends Error {}
+
 /** How long after the last render the latest misses are sent. */
 export const QUIET_MS = 1000;
 /** Requests in flight at once, per window. */
@@ -374,6 +376,7 @@ export function createTwain(deps: TwainDeps): Twain {
         deps.fetch,
         buildBriefRequest(render.base, input, check.apiKey, current.controller.signal),
       );
+      if (!brief.trim()) throw new EmptyBriefError("Document brief came back empty. Retry translation.");
     } catch (error) {
       if (current === run) {
         const covered = current.awaitingBrief.get(render.briefKey)?.size ?? render.misses.size;
@@ -385,7 +388,9 @@ export function createTwain(deps: TwainDeps): Twain {
         );
         haltRun(
           current,
-          classifyConnectionError(error, render.settings, render.settings.reasoningEffort !== "default"),
+          error instanceof EmptyBriefError
+            ? { message: error.message }
+            : classifyConnectionError(error, render.settings, render.settings.reasoningEffort !== "default"),
         );
       }
       return;
@@ -402,9 +407,6 @@ export function createTwain(deps: TwainDeps): Twain {
       briefs.set(render.briefKey, context);
       enqueueBatches(context, misses, render.settings);
     } else {
-      if (brief === "") {
-        deps.log.error(`A Document brief came back empty (${render.base.url}, model ${render.base.model})`);
-      }
       failed.add(render.briefKey);
     }
     landed(current);
