@@ -1,46 +1,72 @@
 # markdown-twain
 
-markdown-twain translates VS Code's built-in Markdown preview with an LLM over the OpenAI-compatible Chat Completions API. It runs in desktop VS Code 1.96 or later. Translation starts only when you choose a translated Display mode; each window starts in Original Only.
+markdown-twain translates VS Code's built-in Markdown preview with an LLM. It works in desktop VS Code 1.96 or later with a provider that supports the OpenAI-compatible Chat Completions API. You choose the provider, model, and Target language. Opening a preview in **Original Only** sends no document text to the provider; translation starts when you select a translated Display mode.
 
-## Read in your language
+## Install locally
 
-Open a Markdown preview and use its globe button, or run **markdown-twain: Pick Display Mode** from the Command Palette:
-
-| Display mode | Preview |
-| --- | --- |
-| **Original Only** | Shows the source document without translation. |
-| **Bilingual** | Shows each translated Block directly below its source Block. |
-| **Translation Only** | Shows translated Blocks in place of their source Blocks. |
-
-Headings, paragraphs (including those in lists and blockquotes), and table cells are translated. Code blocks, math blocks, front matter, raw HTML blocks, and image-only paragraphs are not sent for translation. In translated prose, the model is asked to preserve Markdown formatting, link URLs, and inline code. Image alt text in a paragraph that also contains prose may change. Blocks already in the Target language are shown as they are. After an edit, only changed Blocks need translation again.
-
-## Install from source
-
-Use Node.js 22 and the repository's pinned pnpm version (`12.6.0`). Build and package the extension from the repository root:
+Install Node.js 22 and pnpm 12.6.0, then run these commands from the repository root:
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm build
 pnpm package
 code --install-extension ./markdown-twain-0.0.1.vsix
 ```
 
-The `.vsix` filename follows the version in `package.json`; use the generated filename if that version has changed. You can also install the package from VS Code's Extensions view using **Install from VSIX...**.
+`pnpm package` builds the extension and writes the `.vsix` in the repository root. Use the generated filename if the version in `package.json` has changed. If the `code` command is unavailable, open VS Code's Extensions view, select **Install from VSIX...**, and choose that file. The extension is for desktop VS Code; it is not published to an extension marketplace.
 
-## Set up an LLM connection
+## Translate a document
 
-1. Run **markdown-twain: Set Up LLM Connection** from the Command Palette.
-2. Choose a Provider preset: **OpenAI**, **OpenRouter**, **DeepSeek**, or **Ollama Cloud**. For another OpenAI-compatible endpoint, choose **Custom** and enter its base URL. The extension appends `/chat/completions` but does not add `/v1`; for example, a local Ollama base URL can be `http://localhost:11434/v1`.
-3. Choose how to provide the API key. You can save it in VS Code SecretStorage or use an environment variable available to the VS Code process. The presets look for `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, and `OLLAMA_API_KEY`, respectively. For Custom, you can name an environment variable or choose **No key** if your server does not require one. Keys are not stored in `settings.json`.
-4. Pick a model from the provider's list or enter a model ID, then optionally choose a Reasoning effort. Setup ends with an automatic Test Connection.
+1. Run **markdown-twain: Set Up LLM Connection** from the Command Palette. Choose a provider, a key source, and a model. Setup ends with a Test Connection result. [Connection options](#llm-connection) are below.
+2. In VS Code **User** Settings, choose `markdownTwain.targetLanguage` if you want a language other than your VS Code display language. The default, `auto`, follows that display language. If it is unsupported, choose a language from the setting's list instead. Simplified and Traditional Chinese are separate choices. There is no source-language setting.
+3. Open a Markdown file and run **Markdown: Open Preview** from the Command Palette. In the preview title bar, select the globe button and choose **Bilingual** or **Translation Only**. You can also run **markdown-twain: Pick Display Mode** from the Command Palette.
 
-Set **markdownTwain.targetLanguage** in VS Code Settings to choose the Target language. Its default, `auto`, follows VS Code's display language. If that language is not supported, choose a language explicitly from the setting's list. There is no source-language setting.
+The status bar shows **Preparing…** and then a count of processed Blocks while translation runs. The preview keeps showing the source until the run finishes, then refreshes with the translations. Selecting **Original Only** restores the untranslated preview and stops translation work. The Display mode applies to previews in the current VS Code window and starts as Original Only in each new window.
+
+| Display mode | What you see |
+| --- | --- |
+| **Original Only** | The built-in preview without translations. |
+| **Bilingual** | Each translated Block below its source Block. |
+| **Translation Only** | Translated Blocks in place of their source Blocks. |
+
+### What gets translated
+
+A **Block** is a heading, paragraph, or table cell; this includes prose in list items and blockquotes. The extension translates these Blocks and reuses a translation while the Block, LLM connection, and Target language stay the same. Blocks already in the Target language can remain in their source form without a duplicate translation.
+
+Code blocks, math blocks, front matter, raw HTML blocks, and paragraphs containing only an image are left unchanged in the preview. Paragraphs containing only inline code, inline math, or inline HTML are also skipped. In prose that contains Markdown formatting, the model is instructed to preserve links, URLs, and inline code.
+
+**What is sent to the provider:** Before translating a document's Blocks, the extension sends up to the first 12,000 characters of the document's raw text to create a Document brief for consistent terminology. This can include code, math, HTML, and images that remain untranslated in the preview. It then sends the Blocks that need translation. A mixed prose paragraph is sent as inline Markdown; inline math, inline HTML, and image alt text in it are not protected and may change. This is a current limitation relative to the [v1 spec](https://github.com/mcdp-adk/markdown-twain/issues/19).
+
+## LLM connection
+
+**Set Up LLM Connection** offers four Provider presets. Each preset supplies its base URL and has a corresponding API-key environment variable:
+
+| Provider preset | Environment variable |
+| --- | --- |
+| OpenAI | `OPENAI_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| Ollama Cloud | `OLLAMA_API_KEY` |
+
+Choose **Custom** for another OpenAI-compatible endpoint, such as a local Ollama or LM Studio server. Enter the API base URL, for example `http://localhost:11434/v1`. The extension appends `/chat/completions` and does not add `/v1` for you. A Custom provider may have no key; Provider presets require one.
+
+The key step can save a key in VS Code's SecretStorage or use an environment variable. For a Custom provider, enter the variable's name or choose **No key**. Set an environment variable before launching VS Code so the extension host can read it; setting it only in VS Code's integrated terminal is insufficient. A saved key takes precedence over an environment variable. Selecting an environment-variable option during setup removes the saved key for that provider. For a preset, clearing a saved key falls back to its environment variable if set; for Custom, use **Set API Key** to configure an environment variable again. Keys are never stored in `settings.json`.
+
+Choose a model from the provider's `/models` list or enter its ID manually. Manual entry remains available if a Custom server has no model-list endpoint. The `default` Reasoning effort sends no effort field. On a fresh install, setup does not ask for an effort; run **markdown-twain: Set Reasoning Effort** after setup to choose another value. **Select Model**, **Set API Key**, **Clear API Key**, and **Test Connection** are also available from the Command Palette. Connection settings live in User Settings, not workspace settings.
 
 ## Troubleshooting
 
-Run **markdown-twain: Test Connection** to check the current provider, key, and model. For more detail, run **markdown-twain: Show Log**. Network failures also point to VS Code's `http.proxy` setting; the extension uses VS Code's proxy handling.
+Run **markdown-twain: Test Connection** first. It reports the provider, model, and connection timing on success; on failure, read the error notification and use a suggested fix command if one is offered. Setup tests the connection automatically. For a failed translation run, **markdown-twain: Show Log** records the provider's message. If setup succeeds but no translation appears, confirm that the preview is in Bilingual or Translation Only and that the Target language is the one you intended.
 
-The following proxy setups cannot be used by the extension:
+| Symptom | Check |
+| --- | --- |
+| No key for a Provider preset | Run **Set API Key**, or make its environment variable available when VS Code starts. A saved key takes precedence over the variable. |
+| Unknown model or HTTP 404 | Run **Select Model**. For a Custom provider, also check the base URL; some servers need `/v1` in it. |
+| HTTP 400 with a non-default Reasoning effort | Run **Set Reasoning Effort** and try `default`. |
+| Custom provider lists no models | Enter a model ID manually; model listing is not required for manual entry. |
+| Custom provider fails Test Connection | The test requires streaming Chat Completions. Translation requests are non-streaming, so a server without streaming may fail the test even if it can translate. |
+| Network error or HTTP 407 | Check VS Code's `http.proxy` setting and the proxy limitations below. |
+
+The extension relies on VS Code's proxy handling. These proxy setups cannot be used directly:
 
 - NTLM or Digest proxies;
 - SOCKS4;
@@ -48,7 +74,7 @@ The following proxy setups cannot be used by the extension:
 - `http.fetchAdditionalSupport: false`;
 - `http.proxySupport: off`.
 
-For an NTLM or Digest corporate proxy, run a local HTTP relay such as Cntlm or Px, then set VS Code's `http.proxy` to the relay's local URL. If either VS Code proxy setting above is disabled, change it before retrying the connection.
+For an NTLM or Digest proxy, use a local HTTP relay such as Cntlm or Px. For an unsupported SOCKS proxy, use a compatible HTTP relay or proxy. Set VS Code's `http.proxy` to the local HTTP URL where that relay listens, and remove either disabling setting listed above before retrying. The extension has no separate proxy setting.
 
 ## Credits
 
