@@ -74,6 +74,17 @@ describe("scenario 14: pre-flight checks", () => {
     expect(s.twain.displayMode).toBe("originalOnly");
   });
 
+  it("does not complete a pending mode pick after settings change", async () => {
+    const s = scenario({ secretLatencyMs: LATENCY_MS * 10 });
+    const pickingMode = s.setDisplayMode("bilingual");
+    s.settings.model = "";
+    s.twain.settingsChanged();
+    await s.advance(LATENCY_MS * 10);
+    expect(await pickingMode).toBeUndefined();
+    expect(s.twain.displayMode).toBe("originalOnly");
+    expect(s.refreshes).toBe(0);
+  });
+
   it("allows a keyless Custom provider and omits Authorization", async () => {
     const s = scenario({
       settings: { provider: "custom", customBaseUrl: "http://localhost:1234/v1" },
@@ -979,6 +990,166 @@ describe("requests", () => {
     // The same resolved language, set explicitly, hits the same cache entry.
     s.settings.targetLanguage = "zh-Hant";
     expect(s.render(DOC, "Hello.\n")).toContain('<div class="twain-t">译 Hello.</div>');
+  });
+});
+
+describe("scenario 13: settings changes", () => {
+  it("starts over in the new Target language while translation is in flight", async () => {
+    const s = scenario({
+      latencyMs: LATENCY_MS * 10,
+      reply: (request) => ({
+        content: request.system.includes("French") ? "FR Hello." : "ZH Hello.",
+      }),
+    });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.advance(QUIET_MS + LATENCY_MS * 10 + 1);
+    expect(s.sent).toHaveLength(1);
+
+    s.settings.targetLanguage = "fr";
+    const refreshesBefore = s.refreshes;
+    s.twain.settingsChanged();
+    expect(s.aborted).toBe(1);
+    expect(s.refreshes - refreshesBefore).toBe(1);
+    expect(s.twain.status).toEqual({ kind: "idle" });
+
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.requests.map((request) => request.kind)).toEqual([
+      "brief",
+      "translation",
+      "brief",
+      "translation",
+    ]);
+    expect(s.requests[2].system).toContain("French");
+    expect(s.sent[1].body.messages[1].content).toMatch(/^Translate to French:/);
+    expect(s.sent[1].system).toContain('A brief of "Hello."');
+    const html = s.render(DOC, "Hello.\n");
+    expect(html).toContain('<div class="twain-t">FR Hello.</div>');
+    expect(html).not.toContain("ZH Hello.");
+  });
+
+  it("reuses an equivalent cache and brief but reads the new Custom key source for new Blocks", async () => {
+    const s = scenario({
+      settings: {
+        provider: "custom",
+        customBaseUrl: "http://localhost:1234/v1",
+        customApiKeyEnv: "OLD_KEY",
+      },
+      env: { OLD_KEY: "sk-old", NEW_KEY: "sk-new" },
+    });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+
+    s.settings.customApiKeyEnv = "NEW_KEY";
+    s.twain.settingsChanged();
+    expect(s.render(DOC, "Hello.\n")).toContain('<div class="twain-t">译 Hello.</div>');
+    await s.settle();
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief", "translation"]);
+
+    s.render(DOC, "Hello.\n\nAnother block.\n");
+    await s.settle();
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief", "translation", "translation"]);
+    expect(s.sent[1].blocks).toEqual(["Another block."]);
+    expect(s.sent[1].headers.Authorization).toBe("Bearer sk-new");
+  });
+
+  it("discards a late answer from the old settings", async () => {
+    const s = scenario({ ignoreAbort: true, latencyMs: LATENCY_MS * 10 });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.advance(QUIET_MS + LATENCY_MS * 10 + 1);
+    expect(s.sent).toHaveLength(1);
+
+    s.settings.targetLanguage = "ja";
+    s.twain.settingsChanged();
+    const refreshesAfterChange = s.refreshes;
+    await s.advance(LATENCY_MS * 10);
+    expect(s.refreshes).toBe(refreshesAfterChange);
+    expect(s.twain.status).toEqual({ kind: "idle" });
+
+    s.settings.targetLanguage = "zh-Hans";
+    s.twain.settingsChanged();
+    expect(s.render(DOC, "Hello.\n")).toBe(s.plainRender("Hello.\n"));
+    await s.settle();
+    expect(s.sent).toHaveLength(2);
+  });
+
+  it("aborts in-flight batches and leaves queued batches from the old settings unsent", async () => {
+    const s = scenario({ latencyMs: LATENCY_MS * 10 });
+    const doc = Array.from({ length: 20 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n");
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.advance(QUIET_MS + LATENCY_MS * 10 + 1);
+    expect(s.sent).toHaveLength(4);
+
+    s.settings.targetLanguage = "ja";
+    s.twain.settingsChanged();
+    expect(s.aborted).toBe(4);
+    await s.advance(LATENCY_MS * 10);
+    expect(s.sent).toHaveLength(4);
+
+    s.render(DOC, doc);
+    await s.settle();
+    expect(s.sent.slice(4).flatMap((request) => request.blocks)).toHaveLength(20);
+    expect(s.sent.slice(4).every((request) => request.system.includes("Japanese"))).toBe(true);
+  });
+
+  it("clears a halted run so the next render starts with the new connection", async () => {
+    const s = scenario({
+      reply: (request) =>
+        request.body.model === "broken"
+          ? { status: 401, body: { error: { message: "Bad credentials" } } }
+          : { content: joinSegments(request.blocks.map(fakeTranslation)) },
+      settings: { model: "broken" },
+    });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.twain.status.kind).toBe("halted");
+
+    s.settings.model = "working";
+    s.twain.settingsChanged();
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    expect(s.requests.filter((request) => request.kind === "brief")).toHaveLength(2);
+    expect(s.sent.map((request) => request.body.model)).toEqual(["broken", "working"]);
+  });
+
+  it("clears failed Blocks even when the changed setting leaves the cache context equivalent", async () => {
+    let attempts = 0;
+    const s = scenario({
+      reply: () => ({ content: attempts++ === 0 ? "" : "译 Hello." }),
+    });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.twain.status).toEqual({ kind: "someFailed", count: 1, total: 1 });
+
+    s.settings.customApiKeyEnv = "IGNORED_FOR_PRESET";
+    s.twain.settingsChanged();
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief", "translation", "translation"]);
+    expect(s.render(DOC, "Hello.\n")).toContain('<div class="twain-t">译 Hello.</div>');
+  });
+
+  it("does not refresh or send requests in originalOnly, including after a quiet-period render", async () => {
+    const s = scenario();
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.setDisplayMode("originalOnly");
+    const refreshesBefore = s.refreshes;
+    s.settings.targetLanguage = "ja";
+    s.twain.settingsChanged();
+    await s.settle();
+    expect(s.refreshes).toBe(refreshesBefore);
+    expect(s.requests).toHaveLength(0);
+    expect(s.twain.status).toEqual({ kind: "idle" });
   });
 });
 

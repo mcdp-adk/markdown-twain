@@ -96,6 +96,8 @@ export interface Twain {
   /** The plugin for the built-in preview's markdown-it, through `extendMarkdownIt`. */
   markdownItPlugin(md: MarkdownIt): MarkdownIt;
   setDisplayMode(mode: DisplayMode): Promise<PreflightFailure | undefined>;
+  /** Restarts translation after a markdownTwain setting changes. */
+  settingsChanged(): void;
   readonly displayMode: DisplayMode;
   setupSteps(provider: string, effort: ReasoningEffort): ReturnType<typeof setupSteps>;
   listModels(settings: ConnectionSettings, keyChoice?: KeyChoice): Promise<string[]>;
@@ -271,11 +273,18 @@ export function createTwain(deps: TwainDeps): Twain {
     quietTimer = deps.clock.setTimeout(endQuietPeriod, QUIET_MS);
   }
 
+  function briefContext(briefKey: string, base: TranslationContext): TranslationContext | undefined {
+    const saved = briefs.get(briefKey);
+    // The cached brief and translations may still match after a setting change,
+    // while the source of the key for a new request may have changed.
+    return saved && { ...saved, keySource: base.keySource };
+  }
+
   function endQuietPeriod(): void {
     quietTimer = undefined;
     if (halted) return;
     for (const render of latestRenders.values()) {
-      const context = briefs.get(render.briefKey);
+      const context = briefContext(render.briefKey, render.base);
       if (context) enqueueBatches(context, render.misses, render.settings);
       // A render with no misses still replaces the misses waiting for a brief in flight.
       else if (render.misses.size > 0 || run?.pending.has(render.briefKey)) enqueueBrief(render);
@@ -500,7 +509,7 @@ export function createTwain(deps: TwainDeps): Twain {
       if (document != null && base) {
         const uri = String(document);
         const briefKey = briefKeyOf(uri, base);
-        context = briefs.get(briefKey);
+        context = briefContext(briefKey, base);
         // After a failed brief, the document has no misses until a retry.
         if (!failed.has(briefKey)) {
           documentRender = { uri, settings, base, briefKey, misses: new Map() };
@@ -593,6 +602,13 @@ export function createTwain(deps: TwainDeps): Twain {
       clearFailures();
       mode = next;
       deps.refresh();
+      updateStatus();
+    },
+    settingsChanged() {
+      modePickVersion++;
+      abortRun();
+      clearFailures();
+      if (mode !== "originalOnly") deps.refresh();
       updateStatus();
     },
     get displayMode() {

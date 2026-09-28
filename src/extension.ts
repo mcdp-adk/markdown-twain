@@ -141,6 +141,9 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
   context.subscriptions.push(
     log,
     statusItem,
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("markdownTwain")) twain.settingsChanged();
+    }),
     vscode.commands.registerCommand("markdownTwain.statusActions", statusActions),
     vscode.commands.registerCommand("markdownTwain.pickDisplayMode", pickDisplayMode),
     vscode.commands.registerCommand("markdownTwain.pickDisplayMode.originalOnly", pickDisplayMode),
