@@ -34,7 +34,7 @@ A **Block** is a heading, paragraph, or table cell; this includes prose in list 
 
 Code blocks, math blocks, front matter, raw HTML blocks, and paragraphs containing only an image are left unchanged in the preview. Paragraphs containing only inline code, inline math, or inline HTML are also skipped. In prose that contains Markdown formatting, the model is instructed to preserve links, URLs, and inline code.
 
-**What is sent to the provider:** Before translating a document's Blocks, the extension sends up to the first 12,000 characters of the document's raw text to create a Document brief for consistent terminology. This can include code, math, HTML, and images that remain untranslated in the preview. It then sends the Blocks that need translation. A mixed prose paragraph is sent as inline Markdown; inline math, inline HTML, and image alt text in it are not protected and may change. This is a current limitation relative to the [v1 spec](https://github.com/mcdp-adk/markdown-twain/issues/19).
+**What is sent to the provider:** Before translating a document's Blocks, the extension sends up to the first 12,000 characters of the document's raw text to create a Document brief for consistent terminology. This can include code, math, HTML, and images that remain untranslated in the preview. It then sends the Blocks that need translation. A mixed prose paragraph is sent as inline Markdown. Preserving inline content is best effort: the model is instructed to keep Markdown syntax, URLs, and inline code unchanged, but its response is not structurally validated. Inline math, inline HTML, and image alt text may also change. The [v1 spec](https://github.com/mcdp-adk/markdown-twain/issues/19) describes this boundary.
 
 ## LLM connection
 
