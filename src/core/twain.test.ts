@@ -351,6 +351,28 @@ describe("scenario 5: sentinel and empty segments", () => {
     expect(s.sent).toHaveLength(1);
   });
 
+  it("treats a segment identical to its Block like the sentinel", async () => {
+    const soft = "这一段已经是\n简体中文。";
+    const doc = `First paragraph.\n\n${soft}\n`;
+    // A model that echoes the Block instead of answering with the sentinel; the echo is of what was sent.
+    const s = scenario({
+      reply: (request) => ({
+        content: joinSegments(request.blocks.map((block) => (block.startsWith("这") ? block : fakeTranslation(block)))),
+      }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.settle();
+
+    const html = s.render(DOC, doc);
+    expect(html).toContain('<div class="twain-t">译 First paragraph.</div>');
+    expect(html.match(/class="twain-t"/g)).toHaveLength(1);
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.settle();
+    expect(s.sent).toHaveLength(1);
+  });
+
   it("fails a Block whose per-Block fallback comes back empty", async () => {
     const s = scenario({
       reply: (request) => {

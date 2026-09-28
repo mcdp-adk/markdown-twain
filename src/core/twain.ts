@@ -65,7 +65,7 @@ interface Miss {
   context: TranslationContext;
 }
 
-/** `noTranslationNeeded` comes from the sentinel and renders as the source in every mode. */
+/** `noTranslationNeeded` comes from the sentinel or an echo, and renders as the source in every mode. */
 type CacheEntry = { kind: "translation"; text: string } | { kind: "noTranslationNeeded" };
 
 /** From the pending set going non-empty until it empties, or until it is aborted. */
@@ -159,7 +159,8 @@ export function createTwain(deps: TwainDeps): Twain {
     }
     batch.forEach((miss, i) => {
       const segment = segments?.[i];
-      if (segment === NO_TRANSLATION_SENTINEL) {
+      // Models often echo a Block already in the Target language instead of answering with the sentinel.
+      if (segment === NO_TRANSLATION_SENTINEL || segment === miss.input) {
         cache.set(miss.cacheKey, { kind: "noTranslationNeeded" });
       } else if (segment) {
         cache.set(miss.cacheKey, { kind: "translation", text: segment });
