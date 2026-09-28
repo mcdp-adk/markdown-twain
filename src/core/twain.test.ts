@@ -461,6 +461,17 @@ describe("scenario 6: Document brief", () => {
     expect(s.render(DOC, "Final text.\n")).toContain('<div class="twain-t">译 Final text.</div>');
   });
 
+  it("sends nothing when the latest render before it lands has no misses", async () => {
+    const s = scenario({ latencyMs: 3 * QUIET_MS });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Half-typed text.\n");
+    await s.advance(QUIET_MS);
+    s.render(DOC, "```\ncode only\n```\n");
+    await s.settle();
+
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
+  });
+
   it("is handled like any other failed request when it fails", async () => {
     const s = scenario({
       secrets: { "apiKey.openrouter": "sk-very-secret" },
