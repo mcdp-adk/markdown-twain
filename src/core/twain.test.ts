@@ -378,6 +378,42 @@ describe("scenario 5: sentinel and empty segments", () => {
     expect(s.sent.map((request) => request.blocks)).toEqual([["First paragraph.", ALREADY, EMPTY], [EMPTY]]);
   });
 
+  it("fires finishedWithFailures once, leaves the status someFailed, and sends the Block again on a Retry", async () => {
+    let skip = true;
+    const s = scenario({
+      reply: (request) => ({
+        content: joinSegments(
+          request.blocks.map((block) => (block === EMPTY && !skip ? fakeTranslation(block) : answer(block))),
+        ),
+      }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.settle();
+
+    expect(s.runEnds).toEqual([{ kind: "finishedWithFailures", count: 1, total: 3 }]);
+    expect(s.twain.status).toEqual({ kind: "someFailed", count: 1, total: 3 });
+
+    // The refresh render starts no run, so nothing more fires.
+    s.render(DOC, doc);
+    await s.settle();
+    expect(s.runEnds).toHaveLength(1);
+    expect(s.twain.status).toEqual({ kind: "someFailed", count: 1, total: 3 });
+
+    skip = false;
+    const refreshesBefore = s.refreshes;
+    s.retry();
+    expect(s.refreshes - refreshesBefore).toBe(1);
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    s.render(DOC, doc);
+    await s.settle();
+
+    expect(s.sent.map((request) => request.blocks)).toEqual([["First paragraph.", ALREADY, EMPTY], [EMPTY]]);
+    expect(s.runEnds).toHaveLength(1);
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    expect(s.render(DOC, doc)).toContain(`<div class="twain-t">译 ${EMPTY}</div>`);
+  });
+
   it("treats a sentinel answer to a single-Block request the same way", async () => {
     const s = scenario({ reply });
     s.setDisplayMode("bilingual");
@@ -609,6 +645,111 @@ describe("scenario 12: two documents", () => {
     expect(s.refreshes - refreshesBefore).toBe(1);
     expect(s.render("file:///a.md", docA)).toContain("译 Document A, paragraph 20.");
     expect(s.render("untitled:Untitled-1", docB)).toContain("译 Document B, paragraph 20.");
+  });
+});
+
+describe("status", () => {
+  const doc = Array.from({ length: 6 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n");
+
+  it("is preparing while the Document brief is written, then counts Blocks landed, then goes idle", async () => {
+    const s = scenario();
+    s.setDisplayMode("bilingual");
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    s.render(DOC, doc);
+    await s.advance(QUIET_MS);
+    expect(s.twain.status).toEqual({ kind: "preparing" });
+
+    await s.settle();
+    expect(s.statuses).toEqual([
+      { kind: "preparing" },
+      { kind: "translating", landed: 0, total: 6 },
+      { kind: "translating", landed: 4, total: 6 },
+      { kind: "idle" },
+    ]);
+    expect(s.runEnds).toEqual([]);
+  });
+
+  it("counts only the edited Block once the brief exists", async () => {
+    const s = scenario();
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.settle();
+    s.statuses.length = 0;
+
+    s.render(DOC, doc.replace("Paragraph 3.", "An edited paragraph."));
+    await s.advance(QUIET_MS - 1);
+    expect(s.statuses).toEqual([]);
+    await s.settle();
+    expect(s.statuses).toEqual([{ kind: "translating", landed: 0, total: 1 }, { kind: "idle" }]);
+  });
+
+  it("counts Blocks across documents, including misses that join the run and Blocks that fail", async () => {
+    const s = scenario({
+      latencyMs: 3 * QUIET_MS,
+      reply: (request) => ({
+        content: joinSegments(
+          request.blocks.map((block) => (block === "B fails." ? "" : fakeTranslation(block))),
+        ),
+      }),
+    });
+    s.setDisplayMode("bilingual");
+    s.render("file:///a.md", "A one.\n\nA two.\n");
+    await s.advance(QUIET_MS);
+    s.render("file:///b.md", "B one.\n\nB fails.\n\nB three.\n");
+    await s.settle();
+
+    // Preparing until no brief is pending or a Block has landed; B's Blocks join A's run.
+    expect(s.statuses).toEqual([
+      { kind: "preparing" },
+      { kind: "translating", landed: 0, total: 5 },
+      { kind: "translating", landed: 2, total: 5 },
+      { kind: "someFailed", count: 1, total: 5 },
+    ]);
+    expect(s.runEnds).toEqual([{ kind: "finishedWithFailures", count: 1, total: 5 }]);
+  });
+
+  it("goes idle when originalOnly is picked mid-run, with no run-end event", async () => {
+    const s = scenario();
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.advance(QUIET_MS + LATENCY_MS * 1.5);
+    expect(s.twain.status).toEqual({ kind: "translating", landed: 0, total: 6 });
+
+    s.setDisplayMode("originalOnly");
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    await s.settle();
+    expect(s.statuses.at(-1)).toEqual({ kind: "idle" });
+    expect(s.runEnds).toEqual([]);
+  });
+
+  it("clears someFailed when a translated mode is picked or originalOnly is picked", async () => {
+    const s = scenario({ reply: () => ({ content: "" }) });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.twain.status).toEqual({ kind: "someFailed", count: 1, total: 1 });
+
+    s.setDisplayMode("translationOnly");
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.twain.status).toEqual({ kind: "someFailed", count: 1, total: 1 });
+
+    s.setDisplayMode("originalOnly");
+    expect(s.twain.status).toEqual({ kind: "idle" });
+    expect(s.runEnds).toHaveLength(2);
+  });
+
+  it("makes Retry refresh only in a translated mode", async () => {
+    const s = scenario();
+    const refreshesBefore = s.refreshes;
+    s.retry();
+    expect(s.refreshes).toBe(refreshesBefore);
+
+    s.setDisplayMode("bilingual");
+    const refreshesAfter = s.refreshes;
+    s.retry();
+    expect(s.refreshes - refreshesAfter).toBe(1);
   });
 });
 

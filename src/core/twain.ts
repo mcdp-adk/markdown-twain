@@ -55,11 +55,30 @@ export interface TwainDeps {
   log: Log;
 }
 
+/**
+ * Translation progress, with change events. Counts are Blocks, never requests or briefs:
+ * `landed` includes failed Blocks, and `total` is every Block the run's pending
+ * set has held, across all documents.
+ */
+export type Status =
+  | { kind: "idle" }
+  | { kind: "preparing" }
+  | { kind: "translating"; landed: number; total: number }
+  | { kind: "someFailed"; count: number; total: number };
+
+/** Fired at most once per run, when it ends. */
+export type RunEnd = { kind: "finishedWithFailures"; count: number; total: number };
+
 export interface Twain {
   /** The plugin for the built-in preview's markdown-it, through `extendMarkdownIt`. */
   markdownItPlugin(md: MarkdownIt): MarkdownIt;
   setDisplayMode(mode: DisplayMode): void;
   readonly displayMode: DisplayMode;
+  /** Clears the failed set, and refreshes if the mode is translated. */
+  retry(): void;
+  readonly status: Status;
+  onStatusChange(listener: (status: Status) => void): void;
+  onRunEnd(listener: (event: RunEnd) => void): void;
 }
 
 interface Miss {
@@ -96,6 +115,12 @@ interface Run {
   inFlight: number;
   /** Per brief key in flight, the misses of the document's latest render, enqueued once its brief lands. */
   awaitingBrief: Map<string, BlockInputs>;
+  /** Blocks the pending set has held. */
+  blocksTotal: number;
+  /** Blocks landed, failed ones included. */
+  blocksLanded: number;
+  /** Blocks failed since the run started or the last retry. */
+  blocksFailed: number;
 }
 
 export function createTwain(deps: TwainDeps): Twain {
@@ -109,6 +134,35 @@ export function createTwain(deps: TwainDeps): Twain {
   const latestRenders = new Map<string, DocumentRender>();
   let quietTimer: unknown;
   let run: Run | undefined;
+  /** Blocks failed since the last retry, out of the Blocks of the runs that ended since then. */
+  let failuresSinceRetry = { count: 0, total: 0 };
+  let status: Status = { kind: "idle" };
+  const statusListeners: ((status: Status) => void)[] = [];
+  const runEndListeners: ((event: RunEnd) => void)[] = [];
+
+  function currentStatus(): Status {
+    if (run) {
+      if (run.blocksLanded === 0 && run.awaitingBrief.size > 0) return { kind: "preparing" };
+      return { kind: "translating", landed: run.blocksLanded, total: run.blocksTotal };
+    }
+    if (failuresSinceRetry.count > 0) return { kind: "someFailed", ...failuresSinceRetry };
+    return { kind: "idle" };
+  }
+
+  /** Call after anything that may change the status; fires a change event if it did. */
+  function updateStatus(): void {
+    const next = currentStatus();
+    if (JSON.stringify(next) === JSON.stringify(status)) return;
+    status = next;
+    for (const listener of statusListeners) listener(status);
+  }
+
+  /** A retry's part in the core: forgets which Blocks failed. */
+  function clearFailures(): void {
+    failed.clear();
+    failuresSinceRetry = { count: 0, total: 0 };
+    if (run) run.blocksFailed = 0;
+  }
 
   /** Until a document's brief lands, `context` is undefined and every Block is a miss. */
   function lookup(
@@ -145,6 +199,7 @@ export function createTwain(deps: TwainDeps): Twain {
     }
     latestRenders.clear();
     if (run) pump(run);
+    updateStatus();
   }
 
   /** The run in progress, or a new one. */
@@ -155,6 +210,9 @@ export function createTwain(deps: TwainDeps): Twain {
       queue: [],
       inFlight: 0,
       awaitingBrief: new Map(),
+      blocksTotal: 0,
+      blocksLanded: 0,
+      blocksFailed: 0,
     };
     return run;
   }
@@ -166,6 +224,7 @@ export function createTwain(deps: TwainDeps): Twain {
       .filter(({ cacheKey }) => !cache.has(cacheKey) && !failed.has(cacheKey) && !run?.pending.has(cacheKey));
     if (fresh.length === 0) return;
     const current = currentRun();
+    current.blocksTotal += fresh.length;
     for (const miss of fresh) current.pending.add(miss.cacheKey);
     for (const batch of packBatches(fresh)) current.queue.push(() => dispatchBatch(current, batch));
   }
@@ -190,11 +249,22 @@ export function createTwain(deps: TwainDeps): Twain {
 
   /** After a request's results are recorded: ends the run once nothing is pending. */
   function landed(current: Run): void {
-    if (current.pending.size === 0) {
-      run = undefined;
-      deps.refresh();
-    } else {
+    if (current.pending.size > 0) {
       pump(current);
+      updateStatus();
+      return;
+    }
+    run = undefined;
+    failuresSinceRetry.total += current.blocksTotal;
+    deps.refresh();
+    updateStatus();
+    if (current.blocksFailed > 0) {
+      const event: RunEnd = {
+        kind: "finishedWithFailures",
+        count: current.blocksFailed,
+        total: current.blocksTotal,
+      };
+      for (const listener of runEndListeners) listener(event);
     }
   }
 
@@ -274,8 +344,11 @@ export function createTwain(deps: TwainDeps): Twain {
       } else {
         if (segments) deps.log.error(`A Block came back empty (${context.url}, model ${context.model})`);
         failed.add(miss.cacheKey);
+        current.blocksFailed++;
+        failuresSinceRetry.count++;
       }
       current.pending.delete(miss.cacheKey);
+      current.blocksLanded++;
     });
     landed(current);
   }
@@ -373,12 +446,27 @@ export function createTwain(deps: TwainDeps): Twain {
     markdownItPlugin,
     setDisplayMode(next) {
       if (next === "originalOnly") abortRun();
-      failed.clear();
+      clearFailures();
       mode = next;
       deps.refresh();
+      updateStatus();
     },
     get displayMode() {
       return mode;
+    },
+    retry() {
+      clearFailures();
+      if (mode !== "originalOnly") deps.refresh();
+      updateStatus();
+    },
+    get status() {
+      return status;
+    },
+    onStatusChange(listener) {
+      statusListeners.push(listener);
+    },
+    onRunEnd(listener) {
+      runEndListeners.push(listener);
     },
   };
 }
