@@ -45,6 +45,7 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
   const exchanges: Exchange[] = [];
   const briefs: string[] = [];
   const errors: string[] = [];
+  let rendered = false;
   let finished!: () => void;
   const runEnded = new Promise<void>((resolve) => (finished = resolve));
 
@@ -68,7 +69,7 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
       return response;
     },
     refresh: () => {
-      if (exchanges.length > 0) finished();
+      if (rendered) finished();
     },
     clock: {
       setTimeout: (callback, ms) => setTimeout(callback, ms),
@@ -90,6 +91,7 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
 
   twain.setDisplayMode("bilingual");
   md.render(sample, { currentDocument: DOC });
+  rendered = true;
   await runEnded;
   const html = md.render(sample, { currentDocument: DOC });
 
