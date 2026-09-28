@@ -19,6 +19,27 @@
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
+    "markdown.markdownItPlugins": true,
+    "markdown.previewStyles": [
+      "./media/preview.css"
+    ],
+    "commands": [
+      {
+        "command": "markdownTwain.showBilingual",
+        "title": "Show Bilingual",
+        "category": "markdown-twain"
+      },
+      {
+        "command": "markdownTwain.showOriginalOnly",
+        "title": "Show Original Only",
+        "category": "markdown-twain"
+      },
+      {
+        "command": "markdownTwain.showLog",
+        "title": "Show Log",
+        "category": "markdown-twain"
+      }
+    ],
     "configuration": {
       "title": "markdown-twain",
       "properties": {
@@ -390,6 +411,60 @@
             "Wallisian",
             "Rarotongan",
             "Fiji Hindi"
+          ]
+        },
+        "markdownTwain.provider": {
+          "type": "string",
+          "scope": "application",
+          "default": "openai",
+          "markdownDescription": "The LLM provider translations are sent to. `custom` uses `#markdownTwain.customBaseUrl#`.",
+          "enum": [
+            "openai",
+            "openrouter",
+            "deepseek",
+            "ollamaCloud",
+            "custom"
+          ],
+          "enumItemLabels": [
+            "OpenAI",
+            "OpenRouter",
+            "DeepSeek",
+            "Ollama Cloud",
+            "Custom"
+          ]
+        },
+        "markdownTwain.customBaseUrl": {
+          "type": "string",
+          "scope": "application",
+          "default": "",
+          "markdownDescription": "The base URL of the Custom provider, used as entered, for example `http://localhost:11434/v1`. `/chat/completions` is added to it."
+        },
+        "markdownTwain.customApiKeyEnv": {
+          "type": "string",
+          "scope": "application",
+          "default": "",
+          "markdownDescription": "The name of the environment variable that holds the Custom provider's API key. Leave it empty when a key is saved or the provider needs none."
+        },
+        "markdownTwain.model": {
+          "type": "string",
+          "scope": "application",
+          "default": "",
+          "markdownDescription": "The model ID translations use. Empty means the LLM connection isn't set up."
+        },
+        "markdownTwain.reasoningEffort": {
+          "type": "string",
+          "scope": "application",
+          "default": "default",
+          "markdownDescription": "How hard the model thinks before translating. `default` sends nothing and leaves it to the model; `none` turns thinking off.",
+          "enum": [
+            "default",
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
           ]
         }
       }
