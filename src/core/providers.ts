@@ -55,6 +55,32 @@ export const REASONING_EFFORTS = [
 
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
+export interface ProviderConnectionSettings {
+  provider: string;
+  customBaseUrl: string;
+  customApiKeyEnv: string;
+}
+
+/** Shared endpoint and credential source for translation and connection setup. */
+export function providerConnection(settings: ProviderConnectionSettings) {
+  if (settings.provider === CUSTOM_PROVIDER_ID) {
+    return {
+      baseUrl: normalizeCustomBaseUrl(settings.customBaseUrl),
+      secretName: `apiKey.${CUSTOM_PROVIDER_ID}`,
+      envVar: settings.customApiKeyEnv,
+      effortStyle: "reasoning_effort" as const,
+    };
+  }
+  const preset = PROVIDER_PRESETS.find((item) => item.id === settings.provider);
+  if (!preset) return undefined;
+  return {
+    baseUrl: preset.baseUrl,
+    secretName: `apiKey.${preset.id}`,
+    envVar: preset.apiKeyEnv,
+    effortStyle: preset.effortStyle,
+  };
+}
+
 /** The Reasoning effort field for a request body; `default` sends nothing. */
 export function effortField(style: EffortStyle, effort: ReasoningEffort): Record<string, unknown> {
   if (effort === "default") return {};

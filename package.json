@@ -63,6 +63,36 @@
         "command": "markdownTwain.showLog",
         "title": "Show Log",
         "category": "markdown-twain"
+      },
+      {
+        "command": "markdownTwain.setUpConnection",
+        "title": "Set Up LLM Connection",
+        "category": "markdown-twain"
+      },
+      {
+        "command": "markdownTwain.selectModel",
+        "title": "Select Model",
+        "category": "markdown-twain"
+      },
+      {
+        "command": "markdownTwain.setReasoningEffort",
+        "title": "Set Reasoning Effort",
+        "category": "markdown-twain"
+      },
+      {
+        "command": "markdownTwain.setApiKey",
+        "title": "Set API Key",
+        "category": "markdown-twain"
+      },
+      {
+        "command": "markdownTwain.clearApiKey",
+        "title": "Clear API Key",
+        "category": "markdown-twain"
+      },
+      {
+        "command": "markdownTwain.testConnection",
+        "title": "Test Connection",
+        "category": "markdown-twain"
       }
     ],
     "menus": {
@@ -105,7 +135,7 @@
           "type": "string",
           "scope": "application",
           "default": "auto",
-          "markdownDescription": "The language translations are written in. `auto` follows VS Code's display language.",
+          "markdownDescription": "The language translations are written in. `auto` follows VS Code's display language. [Open Target Language Setting](command:markdownTwain.openTargetLanguageSetting)",
           "enum": [
             "auto",
             "en",
@@ -475,7 +505,7 @@
           "type": "string",
           "scope": "application",
           "default": "openai",
-          "markdownDescription": "The LLM provider translations are sent to. `custom` uses `#markdownTwain.customBaseUrl#`.",
+          "markdownDescription": "The LLM provider translations are sent to. `custom` uses `#markdownTwain.customBaseUrl#`. [Set Up LLM Connection](command:markdownTwain.setUpConnection)",
           "enum": [
             "openai",
             "openrouter",
@@ -495,25 +525,25 @@
           "type": "string",
           "scope": "application",
           "default": "",
-          "markdownDescription": "The base URL of the Custom provider, used as entered, for example `http://localhost:11434/v1`. `/chat/completions` is added to it."
+          "markdownDescription": "The base URL of the Custom provider, used as entered, for example `http://localhost:11434/v1`. `/chat/completions` is added to it. [Set Up LLM Connection](command:markdownTwain.setUpConnection)"
         },
         "markdownTwain.customApiKeyEnv": {
           "type": "string",
           "scope": "application",
           "default": "",
-          "markdownDescription": "The name of the environment variable that holds the Custom provider's API key. Leave it empty when a key is saved or the provider needs none."
+          "markdownDescription": "The name of the environment variable that holds the Custom provider's API key. Leave it empty when a key is saved or the provider needs none. [Set API Key](command:markdownTwain.setApiKey)"
         },
         "markdownTwain.model": {
           "type": "string",
           "scope": "application",
           "default": "",
-          "markdownDescription": "The model ID translations use. Empty means the LLM connection isn't set up."
+          "markdownDescription": "The model ID translations use. Empty means the LLM connection isn't set up. [Select Model](command:markdownTwain.selectModel)"
         },
         "markdownTwain.reasoningEffort": {
           "type": "string",
           "scope": "application",
           "default": "default",
-          "markdownDescription": "How hard the model thinks before translating. `default` sends nothing and leaves it to the model; `none` turns thinking off.",
+          "markdownDescription": "How hard the model thinks before translating. `default` sends nothing and leaves it to the model; `none` turns thinking off. [Set Reasoning Effort](command:markdownTwain.setReasoningEffort)",
           "enum": [
             "default",
             "none",

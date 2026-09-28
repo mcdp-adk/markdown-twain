@@ -1,12 +1,6 @@
 import { briefSystemPrompt, briefUserMessage } from "./brief-prompt.ts";
 import { BATCH_SEPARATOR, translateSystemPrompt, translateUserPrefix } from "./prompt.ts";
-import {
-  CUSTOM_PROVIDER_ID,
-  effortField,
-  normalizeCustomBaseUrl,
-  PROVIDER_PRESETS,
-  type ReasoningEffort,
-} from "./providers.ts";
+import { effortField, providerConnection, type ReasoningEffort } from "./providers.ts";
 import { resolveTargetLanguage } from "./target-language.ts";
 
 /** A snapshot of the extension's settings plus `vscode.env.language`. */
@@ -52,22 +46,15 @@ export function translationContext(settings: Settings, brief?: string): Translat
   if (!language.ok) return undefined;
   const { tag, englishName } = language.language;
 
-  let baseUrl: string;
-  let keySource: KeySource;
-  let effort: Record<string, unknown>;
-  if (settings.provider === CUSTOM_PROVIDER_ID) {
-    baseUrl = normalizeCustomBaseUrl(settings.customBaseUrl);
-    keySource = { secretName: `apiKey.${CUSTOM_PROVIDER_ID}`, envVar: settings.customApiKeyEnv };
-    effort = effortField("reasoning_effort", settings.reasoningEffort);
-  } else {
-    const preset = PROVIDER_PRESETS.find((p) => p.id === settings.provider);
-    if (!preset) return undefined;
-    baseUrl = preset.baseUrl;
-    keySource = { secretName: `apiKey.${preset.id}`, envVar: preset.apiKeyEnv };
-    effort = effortField(preset.effortStyle, settings.reasoningEffort);
-  }
+  const connection = providerConnection(settings);
+  if (!connection) return undefined;
+  const keySource: KeySource = {
+    secretName: connection.secretName,
+    envVar: connection.envVar,
+  };
+  const effort = effortField(connection.effortStyle, settings.reasoningEffort);
 
-  const url = `${baseUrl}/chat/completions`;
+  const url = `${connection.baseUrl}/chat/completions`;
   const body = {
     model: settings.model,
     messages: [{ role: "system", content: translateSystemPrompt(englishName, brief) }],
@@ -183,13 +170,22 @@ export async function send(fetch: typeof globalThis.fetch, request: [string, Req
 }
 
 /** `error.message`, then `error` as a string, then `message`, then the raw body. */
-function providerMessage(text: string): string {
+export function providerMessage(text: string): string {
   try {
     const json = JSON.parse(text);
-    const message = json?.error?.message ?? json?.error ?? json?.message;
-    if (typeof message === "string") return message;
+    for (const message of [json?.error?.message, json?.error, json?.message]) {
+      if (typeof message === "string") return message;
+    }
   } catch {
     // Not JSON; fall through to the raw body.
   }
   return text;
+}
+
+export async function resolveApiKey(
+  secret: (name: string) => Promise<string | undefined>,
+  env: Readonly<Record<string, string | undefined>>,
+  source: KeySource,
+): Promise<string | undefined> {
+  return (await secret(source.secretName)) || (source.envVar && env[source.envVar]) || undefined;
 }
