@@ -11,4 +11,4 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const setting = manifest.contributes.configuration.properties["markdownTwain.targetLanguage"];
 
 Object.assign(setting, targetLanguageEnum());
-writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);

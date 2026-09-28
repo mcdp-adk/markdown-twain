@@ -128,9 +128,11 @@ export function createTwain(deps: TwainDeps): Twain {
   }
 
   function pump(current: Run): void {
-    while (current.inFlight < MAX_IN_FLIGHT && current.queue.length > 0) {
+    while (current.inFlight < MAX_IN_FLIGHT) {
+      const batch = current.queue.shift();
+      if (!batch) return;
       current.inFlight++;
-      void dispatch(current, current.queue.shift()!);
+      void dispatch(current, batch);
     }
   }
 

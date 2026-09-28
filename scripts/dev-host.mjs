@@ -25,7 +25,7 @@ const settings = JSON.parse(
 settings["workbench.colorTheme"] = theme;
 writeFileSync(
   join(userDataDir, "User", "settings.json"),
-  JSON.stringify(settings, null, 2) + "\n",
+  `${JSON.stringify(settings, null, 2)}\n`,
 );
 
 // When this runs inside VS Code's own terminal or extension host, the variable

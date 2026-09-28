@@ -96,6 +96,8 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
 
   // URLs and inline code survive unchanged.
   for (const { blocks, segments } of answered) {
-    blocks.forEach((block, i) => expect(verbatimParts(segments[i])).toEqual(verbatimParts(block)));
+    blocks.forEach((block, i) => {
+      expect(verbatimParts(segments[i])).toEqual(verbatimParts(block));
+    });
   }
 });

@@ -2,13 +2,10 @@
 body { --twain-rule: rgba(0, 0, 0, 0.18); }
 body.vscode-dark { --twain-rule: rgba(255, 255, 255, 0.18); }
 body.vscode-high-contrast { --twain-rule: var(--vscode-contrastBorder, currentColor); }
-.twain-t { color: oklch(0.5 0.12 162.48); }                        /* light: ≥5.1:1 */
-body.vscode-dark .twain-t { color: oklch(0.693 0.17 162.48); }      /* Read Frog's green */
-body.vscode-high-contrast .twain-t { color: inherit; text-decoration: underline dashed; text-underline-offset: 4px; }
+.twain-t { color: oklch(0.5 0.12 162.48); /* light: ≥5.1:1 */ }
 span.twain-t { display: block; margin-top: 0.15em; }
 p:has(+ div.twain-t) { margin-bottom: 0.15em; }
 p + div.twain-t { margin-bottom: 16px; }
-li > p + div.twain-t { margin-bottom: 0.7em; }
 :is(h1, h2, h3, h4, h5, h6):has(+ div.twain-t) { margin-bottom: 0.15em; padding-bottom: 0; border-bottom: none; }
 :is(h1, h2, h3, h4, h5, h6) + div.twain-t { font-weight: 600; line-height: 1.25; margin-bottom: 16px; }
 h1 + div.twain-t { font-size: 2em; padding-bottom: 0.3em; border-bottom: 1px solid var(--twain-rule); }
@@ -16,3 +13,6 @@ h2 + div.twain-t { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px s
 h3 + div.twain-t { font-size: 1.25em; }
 h5 + div.twain-t { font-size: 0.875em; }
 h6 + div.twain-t { font-size: 0.85em; }
+li > p + div.twain-t { margin-bottom: 0.7em; }
+body.vscode-dark .twain-t { color: oklch(0.693 0.17 162.48); /* Read Frog's green */ }
+body.vscode-high-contrast .twain-t { color: inherit; text-decoration: underline dashed; text-underline-offset: 4px; }
