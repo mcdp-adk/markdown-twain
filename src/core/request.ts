@@ -1,3 +1,4 @@
+import { briefSystemPrompt, briefUserMessage } from "./brief-prompt.ts";
 import { BATCH_SEPARATOR, translateSystemPrompt, translateUserPrefix } from "./prompt.ts";
 import {
   CUSTOM_PROVIDER_ID,
@@ -33,14 +34,20 @@ export interface TranslationContext {
   key: string;
   url: string;
   model: string;
+  /** The Target language's English name. */
+  targetLanguage: string;
   /** The request body without the user message. */
   body: { messages: { role: string; content: string }[] } & Record<string, unknown>;
   userPrefix: string;
   keySource: KeySource;
 }
 
-/** The context for these settings, or nothing when the Target language or provider doesn't resolve. */
-export function translationContext(settings: Settings): TranslationContext | undefined {
+/**
+ * The context for these settings and a document's `brief`, or nothing when the
+ * Target language or provider doesn't resolve. Without a brief, it is the
+ * context a Document brief is requested and kept under.
+ */
+export function translationContext(settings: Settings, brief?: string): TranslationContext | undefined {
   const language = resolveTargetLanguage(settings.targetLanguage, settings.displayLanguage);
   if (!language.ok) return undefined;
   const { tag, englishName } = language.language;
@@ -63,7 +70,7 @@ export function translationContext(settings: Settings): TranslationContext | und
   const url = `${baseUrl}/chat/completions`;
   const body = {
     model: settings.model,
-    messages: [{ role: "system", content: translateSystemPrompt(englishName) }],
+    messages: [{ role: "system", content: translateSystemPrompt(englishName, brief) }],
     stream: false,
     ...effort,
   };
@@ -72,6 +79,7 @@ export function translationContext(settings: Settings): TranslationContext | und
     key: JSON.stringify({ targetLanguage: tag, url, body, userPrefix }),
     url,
     model: settings.model,
+    targetLanguage: englishName,
     body,
     userPrefix,
     keySource,
@@ -120,6 +128,24 @@ export function buildRequest(
     messages: [...context.body.messages, { role: "user", content: context.userPrefix + input }],
   };
   return [context.url, { method: "POST", headers, body: JSON.stringify(body), signal }];
+}
+
+/** A Document brief request for `text`, with the same parameters as translation. */
+export function buildBriefRequest(
+  context: TranslationContext,
+  text: string,
+  apiKey: string | undefined,
+  signal: AbortSignal,
+): [string, RequestInit] {
+  const briefContext = {
+    ...context,
+    body: {
+      ...context.body,
+      messages: [{ role: "system", content: briefSystemPrompt(context.targetLanguage) }],
+    },
+    userPrefix: "",
+  };
+  return buildRequest(briefContext, briefUserMessage(text), apiKey, signal);
 }
 
 export class RequestError extends Error {

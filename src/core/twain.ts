@@ -6,6 +6,7 @@ import { NO_TRANSLATION_SENTINEL } from "./prompt.ts";
 import {
   answerSegments,
   batchInput,
+  buildBriefRequest,
   buildRequest,
   type KeySource,
   RequestError,
@@ -26,6 +27,8 @@ const MAX_IN_FLIGHT = 4;
 const MAX_BATCH_BLOCKS = 4;
 /** Characters of Block text per request, at most, unless a single Block is longer. */
 const MAX_BATCH_CHARS = 1000;
+/** Characters of a document's current text its Document brief is written from. */
+const BRIEF_INPUT_CHARS = 12_000;
 
 export interface Clock {
   setTimeout(callback: () => void, ms: number): unknown;
@@ -65,39 +68,58 @@ interface Miss {
   context: TranslationContext;
 }
 
+/** Block `token.content` → its request input. */
+type Blocks = Map<string, string>;
+
+/** One document's latest render in a translated mode. */
+interface DocumentRender {
+  uri: string;
+  settings: Settings;
+  /** The translation context without the Document brief. */
+  base: TranslationContext;
+  /** The document URI and `base`, which its Document brief is kept under. */
+  briefKey: string;
+  /** The Blocks missing from the cache. */
+  misses: Blocks;
+}
+
 /** `noTranslationNeeded` comes from the sentinel or an echo, and renders as the source in every mode. */
 type CacheEntry = { kind: "translation"; text: string } | { kind: "noTranslationNeeded" };
 
 /** From the pending set going non-empty until it empties, or until it is aborted. */
 interface Run {
   controller: AbortController;
-  /** Cache keys queued or in flight. */
+  /** Cache keys and brief keys queued or in flight. */
   pending: Set<string>;
-  /** Requests waiting for a free slot, each the Blocks it carries, in document order. */
-  queue: Miss[][];
+  /** Requests waiting for a free slot, in FIFO order. */
+  queue: (() => Promise<void>)[];
   inFlight: number;
+  /** Per brief key in flight, the misses of the document's latest render, enqueued once its brief lands. */
+  awaitingBrief: Map<string, Blocks>;
 }
 
 export function createTwain(deps: TwainDeps): Twain {
   let mode: DisplayMode = "originalOnly";
   const cache = new Map<string, CacheEntry>();
-  /** Cache keys whose request failed; they render as source and aren't misses. */
+  /** Per brief key, the document's translation context with its Document brief; frozen once it lands. */
+  const briefs = new Map<string, TranslationContext>();
+  /** Cache keys and brief keys whose request failed; their Blocks render as source and aren't misses. */
   const failed = new Set<string>();
-  /** Per `env.currentDocument`, the misses of its latest render. */
-  const latestMisses = new Map<string, Map<string, Miss>>();
+  /** Per `env.currentDocument`, its latest render. */
+  const latestRenders = new Map<string, DocumentRender>();
   let quietTimer: unknown;
   let run: Run | undefined;
 
+  /** Until a document's brief lands, `context` is undefined and every Block is a miss. */
   function lookup(
     token: Token,
     context: TranslationContext | undefined,
-    misses: Map<string, Miss> | undefined,
+    render: DocumentRender | undefined,
   ): string | undefined {
-    if (!context) return undefined;
-    const cacheKey = `${context.key}\n${token.content}`;
-    const entry = cache.get(cacheKey);
-    if (entry === undefined && misses && !failed.has(cacheKey)) {
-      misses.set(cacheKey, { cacheKey, input: requestInput(token.content), context });
+    const cacheKey = context && cacheKeyOf(context, token.content);
+    const entry = cacheKey === undefined ? undefined : cache.get(cacheKey);
+    if (entry === undefined && render && !(cacheKey !== undefined && failed.has(cacheKey))) {
+      render.misses.set(token.content, requestInput(token.content));
     }
     return entry?.kind === "translation" ? entry.text : undefined;
   }
@@ -114,29 +136,99 @@ export function createTwain(deps: TwainDeps): Twain {
 
   function endQuietPeriod(): void {
     quietTimer = undefined;
-    for (const misses of latestMisses.values()) {
-      const fresh = [...misses.values()].filter(
-        ({ cacheKey }) => !cache.has(cacheKey) && !failed.has(cacheKey) && !run?.pending.has(cacheKey),
-      );
-      if (fresh.length === 0) continue;
-      run ??= { controller: new AbortController(), pending: new Set(), queue: [], inFlight: 0 };
-      for (const miss of fresh) run.pending.add(miss.cacheKey);
-      run.queue.push(...packBatches(fresh));
+    for (const render of latestRenders.values()) {
+      const context = briefs.get(render.briefKey);
+      if (context) enqueueBatches(context, render.misses);
+      else if (render.misses.size > 0) enqueueBrief(render);
     }
-    latestMisses.clear();
+    latestRenders.clear();
     if (run) pump(run);
+  }
+
+  function startRun(): Run {
+    run ??= {
+      controller: new AbortController(),
+      pending: new Set(),
+      queue: [],
+      inFlight: 0,
+      awaitingBrief: new Map(),
+    };
+    return run;
+  }
+
+  /** Enqueues a document's misses that aren't cached, failed, or pending, packed into batches. */
+  function enqueueBatches(context: TranslationContext, misses: Blocks): void {
+    const fresh = [...misses]
+      .map(([content, input]) => ({ cacheKey: cacheKeyOf(context, content), input, context }))
+      .filter(({ cacheKey }) => !cache.has(cacheKey) && !failed.has(cacheKey) && !run?.pending.has(cacheKey));
+    if (fresh.length === 0) return;
+    const current = startRun();
+    for (const miss of fresh) current.pending.add(miss.cacheKey);
+    for (const batch of packBatches(fresh)) current.queue.push(() => dispatchBatch(current, batch));
+  }
+
+  /** Enqueues a document's brief, unless it is pending; its latest misses wait for it. */
+  function enqueueBrief(render: DocumentRender): void {
+    const current = startRun();
+    current.awaitingBrief.set(render.briefKey, render.misses);
+    if (current.pending.has(render.briefKey)) return;
+    current.pending.add(render.briefKey);
+    current.queue.push(() => dispatchBrief(current, render));
   }
 
   function pump(current: Run): void {
     while (current.inFlight < MAX_IN_FLIGHT) {
-      const batch = current.queue.shift();
-      if (!batch) return;
+      const request = current.queue.shift();
+      if (!request) return;
       current.inFlight++;
-      void dispatch(current, batch);
+      void request();
     }
   }
 
-  async function dispatch(current: Run, batch: Miss[]): Promise<void> {
+  /** After a request's results are recorded: ends the run once nothing is pending. */
+  function landed(current: Run): void {
+    if (current.pending.size === 0) {
+      run = undefined;
+      deps.refresh();
+    } else {
+      pump(current);
+    }
+  }
+
+  async function dispatchBrief(current: Run, render: DocumentRender): Promise<void> {
+    let brief: string | undefined;
+    try {
+      const text = deps.readDocument(render.uri);
+      if (text === undefined) throw new Error("The document's text can't be read");
+      const apiKey = await resolveApiKey(render.base.keySource);
+      const input = text.slice(0, BRIEF_INPUT_CHARS);
+      brief = await send(
+        deps.fetch,
+        buildBriefRequest(render.base, input, apiKey, current.controller.signal),
+      );
+    } catch (error) {
+      if (current === run) logRequestFailure("Document brief", error, render.base, render.uri);
+    }
+    // Aborted: late results are discarded.
+    if (current !== run) return;
+    current.inFlight--;
+
+    const misses = current.awaitingBrief.get(render.briefKey) ?? new Map();
+    current.awaitingBrief.delete(render.briefKey);
+    current.pending.delete(render.briefKey);
+    const context = brief ? translationContext(render.settings, brief) : undefined;
+    if (context) {
+      briefs.set(render.briefKey, context);
+      enqueueBatches(context, misses);
+    } else {
+      if (brief === "")
+        deps.log.error(`A Document brief came back empty (${render.base.url}, model ${render.base.model})`);
+      failed.add(render.briefKey);
+    }
+    landed(current);
+  }
+
+  async function dispatchBatch(current: Run, batch: Miss[]): Promise<void> {
     const { context } = batch[0];
     let segments: string[] | undefined;
     try {
@@ -145,7 +237,14 @@ export function createTwain(deps: TwainDeps): Twain {
       const request = buildRequest(context, input, apiKey, current.controller.signal);
       segments = answerSegments(await send(deps.fetch, request), batch.length);
     } catch (error) {
-      if (current === run) logRequestFailure(error, context, batch.length);
+      if (current === run) {
+        logRequestFailure(
+          "Translation",
+          error,
+          context,
+          batch.length === 1 ? "1 Block" : `${batch.length} Blocks`,
+        );
+      }
     }
     // Aborted: late results are discarded.
     if (current !== run) return;
@@ -155,7 +254,7 @@ export function createTwain(deps: TwainDeps): Twain {
       deps.log.info(
         `A batch of ${batch.length} Blocks came back as ${segments.length} segments; sending each Block on its own.`,
       );
-      current.queue.push(...batch.map((miss) => [miss]));
+      for (const miss of batch) current.queue.push(() => dispatchBatch(current, [miss]));
       pump(current);
       return;
     }
@@ -172,12 +271,7 @@ export function createTwain(deps: TwainDeps): Twain {
       }
       current.pending.delete(miss.cacheKey);
     });
-    if (current.pending.size === 0) {
-      run = undefined;
-      deps.refresh();
-    } else {
-      pump(current);
-    }
+    landed(current);
   }
 
   async function resolveApiKey(source: KeySource): Promise<string | undefined> {
@@ -185,19 +279,23 @@ export function createTwain(deps: TwainDeps): Twain {
   }
 
   /** Logs the status, the provider's message, the base URL, and the model; never the key or headers. */
-  function logRequestFailure(error: unknown, context: TranslationContext, blockCount: number): void {
+  function logRequestFailure(
+    request: string,
+    error: unknown,
+    context: TranslationContext,
+    subject: string,
+  ): void {
     const status = error instanceof RequestError && error.status !== undefined ? `${error.status} ` : "";
     const message = error instanceof Error ? error.message : String(error);
-    const blocks = blockCount === 1 ? "1 Block" : `${blockCount} Blocks`;
     deps.log.error(
-      `Translation request failed: ${status}${message} (${blocks}, ${context.url}, model ${context.model})`,
+      `${request} request failed: ${status}${message} (${subject}, ${context.url}, model ${context.model})`,
     );
   }
 
   function abortRun(): void {
     run?.controller.abort();
     run = undefined;
-    latestMisses.clear();
+    latestRenders.clear();
     stopQuietPeriod();
   }
 
@@ -206,13 +304,22 @@ export function createTwain(deps: TwainDeps): Twain {
     md.renderer.render = function (this: Renderer, tokens, options, env) {
       if (mode === "originalOnly") return render.call(this, tokens, options, env);
 
-      const context = translationContext(deps.settings());
+      // A copy, so that a brief landing later is built from the settings of this render.
+      const settings = { ...deps.settings() };
+      const base = translationContext(settings);
       const document: unknown = env?.currentDocument;
-      let misses: Map<string, Miss> | undefined;
-      if (document != null && context) {
-        misses = new Map();
-        latestMisses.set(String(document), misses);
-        restartQuietPeriod();
+      let context: TranslationContext | undefined;
+      let documentRender: DocumentRender | undefined;
+      if (document != null && base) {
+        const uri = String(document);
+        const briefKey = `${uri}\n${base.key}`;
+        context = briefs.get(briefKey);
+        // After a failed brief, the document has no misses until a retry.
+        if (!failed.has(briefKey)) {
+          documentRender = { uri, settings, base, briefKey, misses: new Map() };
+          latestRenders.set(uri, documentRender);
+          restartQuietPeriod();
+        }
       }
 
       const renderToken = (i: number) => {
@@ -228,7 +335,7 @@ export function createTwain(deps: TwainDeps): Twain {
         }
         const where = blockOf(tokens[i - 1], token);
         const source = this.renderInline(token.children ?? [], options, env);
-        const translation = where && lookup(token, context, misses);
+        const translation = where && lookup(token, context, documentRender);
         if (translation == null) {
           out += source;
           continue;
@@ -268,6 +375,11 @@ export function createTwain(deps: TwainDeps): Twain {
       return mode;
     },
   };
+}
+
+/** A Block's raw inline Markdown under a translation context that covers its whole request. */
+function cacheKeyOf(context: TranslationContext, content: string): string {
+  return `${context.key}\n${content}`;
 }
 
 /**
