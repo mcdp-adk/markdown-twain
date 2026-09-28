@@ -17,3 +17,4 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 ## Conventions
 
 - Use worktrees and PRs by default.
+- Check off issue acceptance criteria as you go.
