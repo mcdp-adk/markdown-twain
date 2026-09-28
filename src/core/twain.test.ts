@@ -59,7 +59,8 @@ describe("scenario 1: bilingual", () => {
     expect(s.render(DOC, MIXED)).toBe(s.plainRender(MIXED));
     expect(s.sent).toHaveLength(0);
 
-    await s.advance(QUIET_MS);
+    // The batches go out once the Document brief lands.
+    await s.advance(QUIET_MS + LATENCY_MS * 1.5);
     expect(s.sent).toHaveLength(2);
 
     await s.settle();
@@ -197,11 +198,12 @@ describe("scenario 3: editing", () => {
   });
 
   it("lets misses from an edit join the run in progress", async () => {
-    const s = scenario({ latencyMs: 3 * QUIET_MS });
+    const latencyMs = 3 * QUIET_MS;
+    const s = scenario({ latencyMs });
     s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     s.render(DOC, V1);
-    await s.advance(QUIET_MS);
+    await s.advance(QUIET_MS + latencyMs + QUIET_MS / 2);
     expect(s.sent).toHaveLength(1);
 
     // The run is still in flight when the edit's misses are added.
@@ -395,6 +397,163 @@ describe("scenario 5: sentinel and empty segments", () => {
   });
 });
 
+describe("scenario 6: Document brief", () => {
+  const doc = Array.from({ length: 6 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n");
+
+  it("is the first request for a document, and its text appears in every batch's system prompt", async () => {
+    const s = scenario();
+    s.setDisplayMode("bilingual");
+    const refreshesBefore = s.refreshes;
+    s.render(DOC, doc);
+    await s.advance(QUIET_MS);
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
+
+    await s.settle();
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief", "translation", "translation"]);
+    expect(s.refreshes - refreshesBefore).toBe(1);
+    for (const request of s.sent) {
+      expect(request.system).toContain('\nDocument brief: A brief of "Paragraph 1.".\nKey terms: none.');
+    }
+    expect(s.render(DOC, doc)).toContain('<div class="twain-t">译 Paragraph 6.</div>');
+  });
+
+  it("is written from the first 12,000 characters of the document's text, with the translation's request parameters", async () => {
+    const s = scenario({ settings: { reasoningEffort: "low" } });
+    s.setDisplayMode("bilingual");
+    const head = `# Title\n\n${"Words and more words. ".repeat(1000)}`.slice(0, 12_000);
+    const long = `${head}The part past the limit.\n`;
+    s.render(DOC, long);
+    await s.settle();
+
+    const [brief, batch] = s.requests;
+    expect(brief.kind).toBe("brief");
+    expect(brief.input.endsWith(`\n${head}`)).toBe(true);
+    expect(brief.input).not.toContain("past the limit");
+    expect(brief.system).not.toBe(batch.system);
+    expect(brief.url).toBe(batch.url);
+    expect(brief.headers).toEqual(batch.headers);
+    const { messages: _brief, ...briefParameters } = brief.body;
+    const { messages: _batch, ...batchParameters } = batch.body;
+    expect(briefParameters).toEqual(batchParameters);
+    expect(briefParameters).toMatchObject({
+      model: "test/model",
+      stream: false,
+      reasoning: { effort: "low" },
+    });
+  });
+
+  it("leaves every Block a miss until it lands, then sends the latest render's misses", async () => {
+    const s = scenario({ latencyMs: 3 * QUIET_MS });
+    s.setDisplayMode("bilingual");
+    const refreshesBefore = s.refreshes;
+    s.render(DOC, "First draft.\n");
+    await s.advance(QUIET_MS);
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
+
+    // An edit while the brief is in flight: still all source, and no second brief.
+    expect(s.render(DOC, "Final text.\n")).toBe(s.plainRender("Final text.\n"));
+    await s.advance(QUIET_MS);
+    expect(s.requests).toHaveLength(1);
+
+    await s.settle();
+    expect(s.sent.map((request) => request.blocks)).toEqual([["Final text."]]);
+    expect(s.refreshes - refreshesBefore).toBe(1);
+    expect(s.render(DOC, "Final text.\n")).toContain('<div class="twain-t">译 Final text.</div>');
+  });
+
+  it("sends nothing when the latest render before it lands has no misses", async () => {
+    const s = scenario({ latencyMs: 3 * QUIET_MS });
+    s.setDisplayMode("bilingual");
+    s.render(DOC, "Half-typed text.\n");
+    await s.advance(QUIET_MS);
+    s.render(DOC, "```\ncode only\n```\n");
+    await s.settle();
+
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
+  });
+
+  it("is handled like any other failed request when it fails", async () => {
+    const s = scenario({
+      secrets: { "apiKey.openrouter": "sk-very-secret" },
+      briefReply: () => ({ status: 500, body: { error: { message: "Upstream error" } } }),
+    });
+    s.setDisplayMode("bilingual");
+    const refreshesBefore = s.refreshes;
+    s.render(DOC, doc);
+    await s.settle();
+
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
+    expect(s.refreshes - refreshesBefore).toBe(1);
+    const log = s.logLines.join("\n");
+    expect(log).toContain("Document brief request failed: 500 Upstream error");
+    expect(log).not.toContain("sk-very-secret");
+
+    // The refresh render shows the source and sends nothing more.
+    expect(s.render(DOC, doc)).toBe(s.plainRender(doc));
+    await s.settle();
+    expect(s.requests).toHaveLength(1);
+
+    // A retry asks for the brief again.
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.settle();
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief", "brief"]);
+  });
+
+  it("isn't regenerated when the document is edited", async () => {
+    const s = scenario();
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.settle();
+
+    const edited = doc.replace("Paragraph 1.", "An edited first paragraph.");
+    s.render(DOC, edited);
+    await s.settle();
+
+    expect(s.requests.map((request) => request.kind)).toEqual([
+      "brief",
+      "translation",
+      "translation",
+      "translation",
+    ]);
+    expect(s.sent[2].blocks).toEqual(["An edited first paragraph."]);
+    expect(s.sent[2].system).toBe(s.sent[0].system);
+    expect(s.render(DOC, edited)).toContain('<div class="twain-t">译 An edited first paragraph.</div>');
+  });
+
+  it("is kept per translation context, so another Target language gets its own brief", async () => {
+    const s = scenario();
+    s.setDisplayMode("bilingual");
+    s.render(DOC, doc);
+    await s.settle();
+
+    s.settings.targetLanguage = "ja";
+    s.render(DOC, doc);
+    await s.settle();
+    s.settings.targetLanguage = "zh-Hans";
+    s.render(DOC, doc);
+    await s.settle();
+
+    const kinds = s.requests.map((request) => request.kind);
+    expect(kinds).toEqual(["brief", "translation", "translation", "brief", "translation", "translation"]);
+    expect(s.requests[3].system).toContain("Japanese");
+  });
+
+  it("makes identical text in two documents be requested twice", async () => {
+    const s = scenario();
+    s.setDisplayMode("bilingual");
+    s.render("file:///a.md", "# Document A\n\nSame text.\n");
+    s.render("file:///b.md", "# Document B\n\nSame text.\n");
+    await s.settle();
+
+    expect(s.requests.filter((request) => request.kind === "brief")).toHaveLength(2);
+    expect(s.sent.map((request) => request.blocks)).toEqual([
+      ["Document A", "Same text."],
+      ["Document B", "Same text."],
+    ]);
+  });
+});
+
 describe("scenario 12: two documents", () => {
   const docA = Array.from({ length: 20 }, (_, i) => `Document A, paragraph ${i + 1}.`).join("\n\n");
   const docB = Array.from({ length: 20 }, (_, i) => `Document B, paragraph ${i + 1}.`).join("\n\n");
@@ -546,7 +705,7 @@ describe("interim failure handling", () => {
     const s = scenario();
     s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
-    await s.advance(QUIET_MS + LATENCY_MS / 2);
+    await s.advance(QUIET_MS + LATENCY_MS * 1.5);
     expect(s.sent).toHaveLength(1);
 
     s.setDisplayMode("originalOnly");
