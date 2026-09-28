@@ -32,11 +32,34 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
     twain.setDisplayMode(mode);
     mirrorDisplayMode();
   };
+  const pickDisplayMode = async () => {
+    const modes: { label: string; mode: DisplayMode }[] = [
+      { label: "Original Only", mode: "originalOnly" },
+      { label: "Bilingual", mode: "bilingual" },
+      { label: "Translation Only", mode: "translationOnly" },
+    ];
+    const selected = await vscode.window.showQuickPick(
+      modes.map(({ label, mode }) => ({
+        label,
+        description: mode === twain.displayMode ? "$(check) Current" : undefined,
+        mode,
+      })),
+      { placeHolder: "Pick Display Mode" },
+    );
+    if (selected) setDisplayMode(selected.mode);
+  };
 
   context.subscriptions.push(
     log,
+    vscode.commands.registerCommand("markdownTwain.pickDisplayMode", pickDisplayMode),
+    vscode.commands.registerCommand("markdownTwain.pickDisplayMode.originalOnly", pickDisplayMode),
+    vscode.commands.registerCommand("markdownTwain.pickDisplayMode.bilingual", pickDisplayMode),
+    vscode.commands.registerCommand("markdownTwain.pickDisplayMode.translationOnly", pickDisplayMode),
     vscode.commands.registerCommand("markdownTwain.showBilingual", () => setDisplayMode("bilingual")),
     vscode.commands.registerCommand("markdownTwain.showOriginalOnly", () => setDisplayMode("originalOnly")),
+    vscode.commands.registerCommand("markdownTwain.showTranslationOnly", () =>
+      setDisplayMode("translationOnly"),
+    ),
     vscode.commands.registerCommand("markdownTwain.showLog", () => log.show()),
   );
   mirrorDisplayMode();

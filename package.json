@@ -25,6 +25,26 @@
     ],
     "commands": [
       {
+        "command": "markdownTwain.pickDisplayMode",
+        "title": "Pick Display Mode",
+        "category": "markdown-twain"
+      },
+      {
+        "command": "markdownTwain.pickDisplayMode.originalOnly",
+        "title": "markdown-twain: Original Only",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "markdownTwain.pickDisplayMode.bilingual",
+        "title": "markdown-twain: Bilingual",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "markdownTwain.pickDisplayMode.translationOnly",
+        "title": "markdown-twain: Translation Only",
+        "icon": "$(globe)"
+      },
+      {
         "command": "markdownTwain.showBilingual",
         "title": "Show Bilingual",
         "category": "markdown-twain"
@@ -35,11 +55,49 @@
         "category": "markdown-twain"
       },
       {
+        "command": "markdownTwain.showTranslationOnly",
+        "title": "Show Translation Only",
+        "category": "markdown-twain"
+      },
+      {
         "command": "markdownTwain.showLog",
         "title": "Show Log",
         "category": "markdown-twain"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "markdownTwain.pickDisplayMode.originalOnly",
+          "when": "false"
+        },
+        {
+          "command": "markdownTwain.pickDisplayMode.bilingual",
+          "when": "false"
+        },
+        {
+          "command": "markdownTwain.pickDisplayMode.translationOnly",
+          "when": "false"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "markdownTwain.pickDisplayMode.originalOnly",
+          "when": "(activeWebviewPanelId == 'markdown.preview' || activeCustomEditorId == 'vscode.markdown.preview.editor') && markdownTwain.displayMode == originalOnly",
+          "group": "navigation@1"
+        },
+        {
+          "command": "markdownTwain.pickDisplayMode.bilingual",
+          "when": "(activeWebviewPanelId == 'markdown.preview' || activeCustomEditorId == 'vscode.markdown.preview.editor') && markdownTwain.displayMode == bilingual",
+          "group": "navigation@1"
+        },
+        {
+          "command": "markdownTwain.pickDisplayMode.translationOnly",
+          "when": "(activeWebviewPanelId == 'markdown.preview' || activeCustomEditorId == 'vscode.markdown.preview.editor') && markdownTwain.displayMode == translationOnly",
+          "group": "navigation@1"
+        }
+      ]
+    },
     "configuration": {
       "title": "markdown-twain",
       "properties": {

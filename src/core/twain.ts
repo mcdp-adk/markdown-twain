@@ -141,6 +141,7 @@ export function createTwain(deps: TwainDeps): Twain {
     let segments: string[] | undefined;
     try {
       const apiKey = await resolveApiKey(context.keySource);
+      if (current !== run) return;
       const input = batchInput(batch.map((miss) => miss.input));
       const request = buildRequest(context, input, apiKey, current.controller.signal);
       segments = answerSegments(await send(deps.fetch, request), batch.length);

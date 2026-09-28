@@ -38,3 +38,39 @@ it("offers every Reasoning effort", () => {
   const setting = manifest.contributes.configuration.properties["markdownTwain.reasoningEffort"];
   expect(setting.enum).toEqual(REASONING_EFFORTS);
 });
+
+it("offers one mode-aware title button on the focused Markdown preview", () => {
+  const modes = ["originalOnly", "bilingual", "translationOnly"];
+  const titles = ["Original Only", "Bilingual", "Translation Only"];
+  const preview =
+    "(activeWebviewPanelId == 'markdown.preview' || activeCustomEditorId == 'vscode.markdown.preview.editor')";
+
+  for (const [index, mode] of modes.entries()) {
+    const command = `markdownTwain.pickDisplayMode.${mode}`;
+    expect(manifest.contributes.commands).toContainEqual({
+      command,
+      title: `markdown-twain: ${titles[index]}`,
+      icon: "$(globe)",
+    });
+    expect(manifest.contributes.menus["editor/title"]).toContainEqual({
+      command,
+      when: `${preview} && markdownTwain.displayMode == ${mode}`,
+      group: "navigation@1",
+    });
+    expect(manifest.contributes.menus.commandPalette).toContainEqual({ command, when: "false" });
+  }
+  expect(Object.keys(manifest.contributes.menus)).toEqual(["commandPalette", "editor/title"]);
+});
+
+it("offers the Display mode picker and Translation Only in the Command Palette", () => {
+  expect(manifest.contributes.commands).toEqual(
+    expect.arrayContaining([
+      { command: "markdownTwain.pickDisplayMode", title: "Pick Display Mode", category: "markdown-twain" },
+      {
+        command: "markdownTwain.showTranslationOnly",
+        title: "Show Translation Only",
+        category: "markdown-twain",
+      },
+    ]),
+  );
+});
