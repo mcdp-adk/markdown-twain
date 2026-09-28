@@ -17,6 +17,134 @@ afterEach(() => {
 
 const DOC = "file:///doc.md";
 
+describe("scenario 14: pre-flight checks", () => {
+  it("rejects an empty model without refreshing or requesting", async () => {
+    const s = scenario({ settings: { model: "" } });
+    expect(await s.setDisplayMode("bilingual")).toEqual({
+      kind: "notSetUp",
+      message: "No LLM connection set up.",
+      fix: "setUpConnection",
+    });
+    expect(s.twain.displayMode).toBe("originalOnly");
+    expect(s.refreshes).toBe(0);
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.requests).toHaveLength(0);
+  });
+
+  it("rejects a Custom provider without a base URL", async () => {
+    const s = scenario({ settings: { provider: "custom", customBaseUrl: "" }, env: {} });
+    expect(await s.setDisplayMode("translationOnly")).toEqual({
+      kind: "notSetUp",
+      message: "No LLM connection set up.",
+      fix: "setUpConnection",
+    });
+    expect(s.twain.displayMode).toBe("originalOnly");
+    expect(s.refreshes).toBe(0);
+  });
+
+  it("rejects a Provider preset without a saved or environment key", async () => {
+    const s = scenario({ settings: { provider: "openai" }, env: {} });
+    expect(await s.setDisplayMode("bilingual")).toEqual({
+      kind: "noKey",
+      message: "No API key for OpenAI.",
+      fix: "setApiKey",
+    });
+    expect(s.twain.displayMode).toBe("originalOnly");
+    expect(s.refreshes).toBe(0);
+  });
+
+  it("rejects an unsupported VS Code display language with its original tag", async () => {
+    const s = scenario({ settings: { targetLanguage: "auto", displayLanguage: "xx-XX" } });
+    expect(await s.setDisplayMode("bilingual")).toEqual({
+      kind: "unsupportedDisplayLanguage",
+      message: "VS Code's display language \"xx-XX\" isn't in the Target language list.",
+      fix: "openTargetLanguageSetting",
+    });
+    expect(s.twain.displayMode).toBe("originalOnly");
+    expect(s.refreshes).toBe(0);
+  });
+
+  it("returns to originalOnly when a translated mode is picked after the key disappears", async () => {
+    const env: Record<string, string | undefined> = { OPENROUTER_API_KEY: "key" };
+    const s = scenario({ env });
+    await s.setDisplayMode("bilingual");
+    delete env.OPENROUTER_API_KEY;
+    expect(await s.setDisplayMode("translationOnly")).toMatchObject({ kind: "noKey" });
+    expect(s.twain.displayMode).toBe("originalOnly");
+  });
+
+  it("allows a keyless Custom provider and omits Authorization", async () => {
+    const s = scenario({
+      settings: { provider: "custom", customBaseUrl: "http://localhost:1234/v1" },
+      env: {},
+    });
+    expect(await s.setDisplayMode("bilingual")).toBeUndefined();
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.requests).toHaveLength(2);
+    expect(s.requests.every((request) => !("Authorization" in request.headers))).toBe(true);
+  });
+
+  it("halts before the first dispatch when a preset key is removed", async () => {
+    const env: Record<string, string | undefined> = { OPENROUTER_API_KEY: "key" };
+    const s = scenario({ env });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    delete env.OPENROUTER_API_KEY;
+    await s.settle();
+    const error = { kind: "noKey", message: "No API key for OpenRouter.", fix: "setApiKey" };
+    expect(s.requests).toHaveLength(0);
+    expect(s.twain.status).toEqual({ kind: "halted", error });
+    expect(s.runEnds).toEqual([{ kind: "halted", error }]);
+  });
+
+  it("checks current settings before dispatch after the model is cleared", async () => {
+    const s = scenario();
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    s.settings.model = "";
+    await s.settle();
+    const error = { kind: "notSetUp", message: "No LLM connection set up.", fix: "setUpConnection" };
+    expect(s.requests).toHaveLength(0);
+    expect(s.runEnds).toEqual([{ kind: "halted", error }]);
+  });
+
+  it("does not dispatch a stale Custom request after its key source changes", async () => {
+    const s = scenario({
+      settings: {
+        provider: "custom",
+        customBaseUrl: "http://localhost:1234/v1",
+        customApiKeyEnv: "FIRST_KEY",
+      },
+      env: { FIRST_KEY: "first", SECOND_KEY: "second" },
+    });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    s.settings.customApiKeyEnv = "SECOND_KEY";
+    await s.settle();
+    expect(s.requests).toHaveLength(0);
+    expect(s.twain.status).toEqual({ kind: "idle" });
+  });
+
+  it("checks again before translating Blocks after the Document brief", async () => {
+    const env: Record<string, string | undefined> = { OPENROUTER_API_KEY: "key" };
+    const s = scenario({
+      env,
+      briefReply: () => {
+        delete env.OPENROUTER_API_KEY;
+        return { content: "A brief." };
+      },
+    });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    const error = { kind: "noKey", message: "No API key for OpenRouter.", fix: "setApiKey" };
+    expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
+    expect(s.runEnds).toEqual([{ kind: "halted", error }]);
+  });
+});
+
 const MIXED = `---
 title: Front matter is not a Block
 ---
@@ -52,7 +180,7 @@ $$
 describe("scenario 1: bilingual", () => {
   it("puts a translation under every Block and leaves everything else untouched", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
 
     // Nothing is cached yet, so the first render shows the source as it is.
@@ -99,7 +227,7 @@ describe("scenario 1: bilingual", () => {
 
   it("sends each Block as raw inline Markdown with soft breaks joined", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "One line\n   and the next.\n\nA hard  \nbreak and\\\nanother.\n");
     await s.settle();
 
@@ -126,7 +254,7 @@ describe("scenario 1: bilingual", () => {
         content: `<think>\nLet me think.\n</think>\n\n  ${fakeTranslation(request.input)}  \n`,
       }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -135,7 +263,7 @@ describe("scenario 1: bilingual", () => {
 
   it("queues nothing for a render without env.currentDocument", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.renderWithoutDocument("Hello.\n");
     await s.settle();
 
@@ -155,7 +283,7 @@ describe("scenario 2: translationOnly and originalOnly", () => {
         }),
     });
     const doc = "# Source Heading\n\nA [link](#source-heading) and `code`.\n\n- a list item\n";
-    s.setDisplayMode("translationOnly");
+    await s.setDisplayMode("translationOnly");
     expect(s.render(DOC, doc)).toBe(s.plainRender(doc));
     await s.settle();
 
@@ -171,11 +299,11 @@ describe("scenario 2: translationOnly and originalOnly", () => {
 
   it("keeps the active run when switching between translated modes", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.advance(QUIET_MS + LATENCY_MS * 1.5);
 
-    s.setDisplayMode("translationOnly");
+    await s.setDisplayMode("translationOnly");
     expect(s.aborted).toBe(0);
     await s.settle();
     expect(s.sent).toHaveLength(1);
@@ -194,12 +322,12 @@ describe("scenario 2: translationOnly and originalOnly", () => {
 
   it("brings back the untouched preview after bilingual", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, MIXED);
     await s.settle();
     const refreshesBefore = s.refreshes;
 
-    s.setDisplayMode("originalOnly");
+    await s.setDisplayMode("originalOnly");
     expect(s.refreshes - refreshesBefore).toBe(1);
     expect(s.render(DOC, MIXED)).toBe(s.plainRender(MIXED));
   });
@@ -210,7 +338,7 @@ describe("scenario 3: editing", () => {
 
   it("re-translates only the edited Block, from the latest render", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, V1);
     await s.settle();
     s.render(DOC, V1);
@@ -238,7 +366,7 @@ describe("scenario 3: editing", () => {
   it("lets misses from an edit join the run in progress", async () => {
     const latencyMs = 3 * QUIET_MS;
     const s = scenario({ latencyMs });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     s.render(DOC, V1);
     await s.advance(QUIET_MS + latencyMs + QUIET_MS / 2);
@@ -263,7 +391,7 @@ describe("scenario 4: batching", () => {
 
   it("packs up to 4 Blocks per request in document order, joined with %%", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     const doc = `${paragraphs(5).join("\n\n")}\n\nA soft\nbreak.\n`;
     s.render(DOC, doc);
@@ -281,7 +409,7 @@ describe("scenario 4: batching", () => {
 
   it("packs up to 1,000 characters per request, and sends a longer Block on its own", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const [a, b, c] = paragraphs(3, 400);
     const long = "Long.".padEnd(1200, "x");
     s.render(DOC, [a, b, c, long, "Short."].join("\n\n"));
@@ -292,7 +420,7 @@ describe("scenario 4: batching", () => {
 
   it("uses the same system prompt, with the batch and sentinel rules, for every request", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, `${paragraphs(5).join("\n\n")}\n`);
     await s.settle();
 
@@ -309,7 +437,7 @@ describe("scenario 4: batching", () => {
       // A model that ignores the separators and answers in one piece.
       reply: (request) => ({ content: request.blocks.map(fakeTranslation).join("\n\n") }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     const doc = paragraphs(3).join("\n\n");
     s.render(DOC, doc);
@@ -341,7 +469,7 @@ describe("scenario 5: sentinel and empty segments", () => {
 
   it("renders a sentinel Block as source in every mode and never requests it again", async () => {
     const s = scenario({ reply });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
     expect(s.sent).toHaveLength(1);
@@ -349,7 +477,7 @@ describe("scenario 5: sentinel and empty segments", () => {
     const bilingual = s.render(DOC, doc);
     expect(bilingual).toContain(`<p>${ALREADY}</p>\n<p>`);
     expect(bilingual).not.toContain("NO_TRANSLATION_NEEDED");
-    s.setDisplayMode("translationOnly");
+    await s.setDisplayMode("translationOnly");
     const translationOnly = s.render(DOC, doc);
     expect(translationOnly).toContain(`<p>${ALREADY}</p>`);
     expect(translationOnly).toContain("<p>译 First paragraph.</p>");
@@ -361,7 +489,7 @@ describe("scenario 5: sentinel and empty segments", () => {
 
   it("leaves an empty segment as source, doesn't re-request it on the next render, and sends it again on a retry", async () => {
     const s = scenario({ reply });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     s.render(DOC, doc);
     await s.settle();
@@ -372,7 +500,7 @@ describe("scenario 5: sentinel and empty segments", () => {
     await s.settle();
     expect(s.sent).toHaveLength(1);
 
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
     expect(s.sent.map((request) => request.blocks)).toEqual([["First paragraph.", ALREADY, EMPTY], [EMPTY]]);
@@ -387,7 +515,7 @@ describe("scenario 5: sentinel and empty segments", () => {
         ),
       }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
 
@@ -416,12 +544,12 @@ describe("scenario 5: sentinel and empty segments", () => {
 
   it("treats a sentinel answer to a single-Block request the same way", async () => {
     const s = scenario({ reply });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, `${ALREADY}\n`);
     await s.settle();
 
     expect(s.render(DOC, `${ALREADY}\n`)).toBe(s.plainRender(`${ALREADY}\n`));
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, `${ALREADY}\n`);
     await s.settle();
     expect(s.sent).toHaveLength(1);
@@ -438,14 +566,14 @@ describe("scenario 5: sentinel and empty segments", () => {
         ),
       }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
 
     const html = s.render(DOC, doc);
     expect(html).toContain('<div class="twain-t">译 First paragraph.</div>');
     expect(html.match(/class="twain-t"/g)).toHaveLength(1);
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
     expect(s.sent).toHaveLength(1);
@@ -459,7 +587,7 @@ describe("scenario 5: sentinel and empty segments", () => {
         return { content: request.input === "Second." ? "" : fakeTranslation(request.input) };
       },
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "First.\n\nSecond.\n");
     await s.settle();
 
@@ -476,7 +604,7 @@ describe("scenario 6: Document brief", () => {
 
   it("is the first request for a document, and its text appears in every batch's system prompt", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     s.render(DOC, doc);
     await s.advance(QUIET_MS);
@@ -493,7 +621,7 @@ describe("scenario 6: Document brief", () => {
 
   it("is written from the first 12,000 characters of the document's text, with the translation's request parameters", async () => {
     const s = scenario({ settings: { reasoningEffort: "low" } });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const head = `# Title\n\n${"Words and more words. ".repeat(1000)}`.slice(0, 12_000);
     const long = `${head}The part past the limit.\n`;
     s.render(DOC, long);
@@ -518,7 +646,7 @@ describe("scenario 6: Document brief", () => {
 
   it("leaves every Block a miss until it lands, then sends the latest render's misses", async () => {
     const s = scenario({ latencyMs: 3 * QUIET_MS });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     s.render(DOC, "First draft.\n");
     await s.advance(QUIET_MS);
@@ -537,7 +665,7 @@ describe("scenario 6: Document brief", () => {
 
   it("sends nothing when the latest render before it lands has no misses", async () => {
     const s = scenario({ latencyMs: 3 * QUIET_MS });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Half-typed text.\n");
     await s.advance(QUIET_MS);
     s.render(DOC, "```\ncode only\n```\n");
@@ -555,7 +683,7 @@ describe("scenario 6: Document brief", () => {
           ? { status: 500, body: { error: { message: "Upstream error" } } }
           : { content: "A brief of the document.\nKey terms: none." },
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     s.render(DOC, doc);
     await s.settle();
@@ -576,7 +704,7 @@ describe("scenario 6: Document brief", () => {
 
     // A retry asks for the brief again.
     failBrief = false;
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
     expect(s.requests.map((request) => request.kind)).toEqual([
@@ -591,7 +719,7 @@ describe("scenario 6: Document brief", () => {
 
   it("isn't regenerated when the document is edited", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
 
@@ -612,7 +740,7 @@ describe("scenario 6: Document brief", () => {
 
   it("is kept per translation context, so another Target language gets its own brief", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
 
@@ -630,7 +758,7 @@ describe("scenario 6: Document brief", () => {
 
   it("makes identical text in two documents be requested twice", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render("file:///a.md", "# Document A\n\nSame text.\n");
     s.render("file:///b.md", "# Document B\n\nSame text.\n");
     await s.settle();
@@ -649,7 +777,7 @@ describe("scenario 12: two documents", () => {
 
   it("share one pending set and one refresh, with never more than 4 requests in flight", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     s.render("file:///a.md", docA);
     s.render("untitled:Untitled-1", docB);
@@ -668,7 +796,7 @@ describe("status", () => {
 
   it("is preparing while the Document brief is written, then counts Blocks landed, then goes idle", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     expect(s.twain.status).toEqual({ kind: "idle" });
     s.render(DOC, doc);
     await s.advance(QUIET_MS);
@@ -686,7 +814,7 @@ describe("status", () => {
 
   it("counts only the edited Block once the brief exists", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
     s.statuses.length = 0;
@@ -707,7 +835,7 @@ describe("status", () => {
         ),
       }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render("file:///a.md", "A one.\n\nA two.\n");
     await s.advance(QUIET_MS);
     s.render("file:///b.md", "B one.\n\nB fails.\n\nB three.\n");
@@ -725,12 +853,12 @@ describe("status", () => {
 
   it("goes idle when originalOnly is picked mid-run, with no run-end event", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.advance(QUIET_MS + LATENCY_MS * 1.5);
     expect(s.twain.status).toEqual({ kind: "translating", landed: 0, total: 6 });
 
-    s.setDisplayMode("originalOnly");
+    await s.setDisplayMode("originalOnly");
     expect(s.twain.status).toEqual({ kind: "idle" });
     await s.settle();
     expect(s.statuses.at(-1)).toEqual({ kind: "idle" });
@@ -739,18 +867,18 @@ describe("status", () => {
 
   it("clears someFailed when a translated mode is picked or originalOnly is picked", async () => {
     const s = scenario({ reply: () => ({ content: "" }) });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
     expect(s.twain.status).toEqual({ kind: "someFailed", count: 1, total: 1 });
 
-    s.setDisplayMode("translationOnly");
+    await s.setDisplayMode("translationOnly");
     expect(s.twain.status).toEqual({ kind: "idle" });
     s.render(DOC, "Hello.\n");
     await s.settle();
     expect(s.twain.status).toEqual({ kind: "someFailed", count: 1, total: 1 });
 
-    s.setDisplayMode("originalOnly");
+    await s.setDisplayMode("originalOnly");
     expect(s.twain.status).toEqual({ kind: "idle" });
     expect(s.runEnds).toHaveLength(2);
   });
@@ -761,7 +889,7 @@ describe("status", () => {
     s.retry();
     expect(s.refreshes).toBe(refreshesBefore);
 
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesAfter = s.refreshes;
     s.retry();
     expect(s.refreshes - refreshesAfter).toBe(1);
@@ -778,7 +906,7 @@ describe("requests", () => {
       settings: { provider, reasoningEffort },
       env: { OPENROUTER_API_KEY: "k", OPENAI_API_KEY: "k", DEEPSEEK_API_KEY: "k" },
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -793,7 +921,7 @@ describe("requests", () => {
       settings: { provider, reasoningEffort: "default" },
       env: { OPENROUTER_API_KEY: "k", OPENAI_API_KEY: "k" },
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -802,7 +930,7 @@ describe("requests", () => {
 
   it("take the key from SecretStorage before the environment", async () => {
     const s = scenario({ secrets: { "apiKey.openrouter": "sk-secret" } });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -818,7 +946,7 @@ describe("requests", () => {
       },
       env: {},
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -832,7 +960,7 @@ describe("requests", () => {
       settings: { provider: "custom", customBaseUrl: "http://localhost:1234", customApiKeyEnv: "MY_KEY" },
       env: { MY_KEY: "sk-mine" },
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -842,7 +970,7 @@ describe("requests", () => {
 
   it("follow a resolved auto Target language, cached under the resolved tag", async () => {
     const s = scenario({ settings: { targetLanguage: "auto", displayLanguage: "zh-tw" } });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
     expect(s.sent[0].input).toBe("Hello.");
@@ -864,7 +992,7 @@ describe("request failure handling", () => {
           ? { status: 401, body: { error: { message: "No auth credentials found" } } }
           : { content: "译 Hello." },
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     const refreshesBefore = s.refreshes;
     s.render(DOC, "Hello.\n");
     await s.settle();
@@ -890,7 +1018,7 @@ describe("request failure handling", () => {
     expect(s.sent).toHaveLength(1);
 
     // Picking a translated mode clears the halt and lets the next render retry.
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
     expect(s.sent).toHaveLength(2);
@@ -899,7 +1027,7 @@ describe("request failure handling", () => {
 
   it("treats an empty translation as a failure", async () => {
     const s = scenario({ reply: () => ({ content: "  <think>…</think>  " }) });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -910,29 +1038,29 @@ describe("request failure handling", () => {
 
   it("drops the run and discards late results when originalOnly is picked", async () => {
     const s = scenario();
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.advance(QUIET_MS + LATENCY_MS * 1.5);
     expect(s.sent).toHaveLength(1);
 
-    s.setDisplayMode("originalOnly");
+    await s.setDisplayMode("originalOnly");
     const refreshesAfter = s.refreshes;
     await s.settle();
     expect(s.refreshes).toBe(refreshesAfter);
 
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     expect(s.render(DOC, "Hello.\n")).toBe(s.plainRender("Hello.\n"));
   });
 
   it("aborts in-flight requests, leaves queued requests unsent, and retries all Blocks later", async () => {
     const s = scenario();
     const doc = Array.from({ length: 20 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n");
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.advance(QUIET_MS + LATENCY_MS * 1.5);
     expect(s.sent).toHaveLength(4);
 
-    s.setDisplayMode("originalOnly");
+    await s.setDisplayMode("originalOnly");
     const refreshesAfter = s.refreshes;
     expect(s.aborted).toBe(4);
     expect(s.render(DOC, doc)).toBe(s.plainRender(doc));
@@ -940,7 +1068,7 @@ describe("request failure handling", () => {
     expect(s.sent).toHaveLength(4);
     expect(s.refreshes).toBe(refreshesAfter);
 
-    s.setDisplayMode("translationOnly");
+    await s.setDisplayMode("translationOnly");
     s.render(DOC, doc);
     await s.settle();
     expect(s.sent.slice(4).flatMap((request) => request.blocks)).toHaveLength(20);
@@ -948,16 +1076,16 @@ describe("request failure handling", () => {
 
   it("discards answers that arrive after cancellation", async () => {
     const s = scenario({ ignoreAbort: true });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.advance(QUIET_MS + LATENCY_MS * 1.5);
-    s.setDisplayMode("originalOnly");
+    await s.setDisplayMode("originalOnly");
     const refreshesAfter = s.refreshes;
     await s.settle();
     expect(s.aborted).toBe(1);
     expect(s.refreshes).toBe(refreshesAfter);
 
-    s.setDisplayMode("translationOnly");
+    await s.setDisplayMode("translationOnly");
     expect(s.render(DOC, "Hello.\n")).toBe(s.plainRender("Hello.\n"));
     await s.settle();
     expect(s.sent).toHaveLength(2);
@@ -965,10 +1093,12 @@ describe("request failure handling", () => {
 
   it("does not send a request when cancellation happens while reading the key", async () => {
     const s = scenario({ secretLatencyMs: LATENCY_MS * 10 });
-    s.setDisplayMode("bilingual");
+    const pickingMode = s.setDisplayMode("bilingual");
+    await s.advance(LATENCY_MS * 10);
+    await pickingMode;
     s.render(DOC, "Hello.\n");
     await s.advance(QUIET_MS + LATENCY_MS);
-    s.setDisplayMode("originalOnly");
+    await s.setDisplayMode("originalOnly");
     await s.settle();
 
     expect(s.requests).toHaveLength(0);
@@ -989,7 +1119,7 @@ describe("retry and halted runs", () => {
             }
           : { content: "译 Hello." },
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.advance(QUIET_MS + LATENCY_MS);
 
@@ -1013,7 +1143,7 @@ describe("retry and halted runs", () => {
         headers: { "Retry-After": "31" },
       }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -1026,7 +1156,7 @@ describe("retry and halted runs", () => {
     const s = scenario({
       reply: () => ({ status: 401, body: { error: { message: "No auth credentials found" } } }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -1045,7 +1175,7 @@ describe("retry and halted runs", () => {
     const s = scenario({
       reply: () => ({ status: 401, body: { error: { message: "Bad credentials" } } }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
 
@@ -1066,7 +1196,7 @@ describe("retry and halted runs", () => {
         body: { error: { message: "missing-model is not a valid model ID" } },
       }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -1080,7 +1210,7 @@ describe("retry and halted runs", () => {
     const s = scenario({
       briefReply: () => ({ status: 401, body: { error: { message: "Bad credentials" } } }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "First.\n\nSecond.\n");
     await s.settle();
 
@@ -1094,7 +1224,7 @@ describe("retry and halted runs", () => {
 
   it("times out a hung request after 120 seconds and retries it twice", async () => {
     const s = scenario({ latencyMs: 10 * 60_000 });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
@@ -1121,7 +1251,7 @@ describe("retry and halted runs", () => {
       connectionFetch: () =>
         new Response("data: ping\n\n", { headers: { "Content-Type": "text/event-stream" } }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
 
@@ -1147,7 +1277,7 @@ describe("retry and halted runs", () => {
       connectionFetch: () =>
         new Response("data: ping\n\n", { headers: { "Content-Type": "text/event-stream" } }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
     expect(s.twain.status).toEqual({ kind: "someFailed", count: 1, total: 1 });
@@ -1174,7 +1304,7 @@ describe("retry and halted runs", () => {
         body: { error: { message: `Rejected credential ${secret}` } },
       }),
     });
-    s.setDisplayMode("bilingual");
+    await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
 
