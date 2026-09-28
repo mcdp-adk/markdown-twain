@@ -1,3 +1,4 @@
+import { networkFailure, redact } from "./error-message.ts";
 import { CUSTOM_PROVIDER_ID, effortField, providerConnection, type ReasoningEffort } from "./providers.ts";
 import { providerMessage, RequestError, resolveApiKey, type Settings } from "./request.ts";
 
@@ -90,23 +91,6 @@ function requireKey(settings: ConnectionSettings, key: string | undefined): void
   }
 }
 
-function hideKey(message: string, key: string | undefined): string {
-  return key ? message.replaceAll(key, "[redacted]") : message;
-}
-
-function networkError(error: unknown, key: string | undefined): Error {
-  const source = error as { message?: string; cause?: { code?: string; message?: string } };
-  const message = hideKey(source?.message ?? String(error), key);
-  const cause = source?.cause;
-  if (!cause) return new Error(message);
-  return new Error(message, {
-    cause: {
-      code: cause.code ? hideKey(cause.code, key) : undefined,
-      message: cause.message ? hideKey(cause.message, key) : undefined,
-    },
-  });
-}
-
 async function fetchResponse(
   deps: ConnectionDeps,
   url: string,
@@ -119,14 +103,17 @@ async function fetchResponse(
     response = await deps.fetch(url, init);
   } catch (error) {
     if ((error as Error)?.name === "AbortError") throw error;
-    throw networkError(error, key);
+    throw networkFailure(error, key);
   }
   if (!response.ok) {
-    throw new ConnectionRequestError(
-      response.status,
-      hideKey(providerMessage(await response.text()), key),
-      hadEffort,
-    );
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      if ((error as Error)?.name === "AbortError") throw error;
+      throw networkFailure(error, key);
+    }
+    throw new ConnectionRequestError(response.status, redact(providerMessage(text), key), hadEffort);
   }
   return response;
 }
@@ -205,6 +192,9 @@ export async function testConnection(
         return elapsed;
       }
     }
+  } catch (error) {
+    if (error instanceof RequestError || (error as Error)?.name === "AbortError") throw error;
+    throw networkFailure(error, key);
   } finally {
     controller.abort();
   }
