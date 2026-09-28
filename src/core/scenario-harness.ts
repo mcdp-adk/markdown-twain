@@ -13,6 +13,8 @@ export { QUIET_MS } from "./twain.ts";
 export const LATENCY_MS = 100;
 
 export interface SentRequest {
+  /** A Document brief request, or a translation request with the `Translate to …:` prefix. */
+  kind: "brief" | "translation";
   url: string;
   headers: Record<string, string>;
   body: {
@@ -20,7 +22,9 @@ export interface SentRequest {
     messages: { role: string; content: string }[];
     [field: string]: unknown;
   };
-  /** The text after the `Translate to …:` prefix. */
+  /** The system prompt. */
+  system: string;
+  /** The user message after the `Translate to …:` prefix, or the whole user message of a brief request. */
   input: string;
   /** The Blocks in `input`, split on the batch separator. */
   blocks: string[];
@@ -43,14 +47,22 @@ export function fakeTranslation(input: string): string {
   return `译 ${input}`;
 }
 
+/** The fake model's Document brief: names the document by its first line. */
+export function fakeBrief(request: SentRequest): string {
+  const document = request.input.slice(request.input.indexOf("\n\n\n") + 3);
+  return `A brief of "${document.split("\n")[0]}".\nKey terms: none.`;
+}
+
 export interface ScenarioOptions {
   settings?: Partial<Settings>;
   secrets?: Record<string, string>;
   env?: Record<string, string | undefined>;
   /** How long the fake provider takes to answer. */
   latencyMs?: number;
-  /** Overrides the fake provider's answer; the default translates each Block. */
+  /** Overrides the fake provider's answer to translation requests; the default translates each Block. */
   reply?: (request: SentRequest) => Reply;
+  /** Overrides the fake provider's answer to Document brief requests. */
+  briefReply?: (request: SentRequest) => Reply;
   /** Preview-owned token attributes, applied to both renderers. */
   decorateMarkdownIt?: (md: MarkdownItInstance) => void;
   /** Simulates a provider that completes even after cancellation. */
@@ -76,8 +88,11 @@ export function scenario(options: ScenarioOptions = {}) {
   const secrets = options.secrets ?? {};
   const reply =
     options.reply ?? ((request) => ({ content: joinSegments(request.blocks.map(fakeTranslation)) }));
+  const briefReply = options.briefReply ?? ((request) => ({ content: fakeBrief(request) }));
 
-  const sent: SentRequest[] = [];
+  /** Each document's current text, as last rendered. */
+  const documents = new Map<string, string>();
+  const requests: SentRequest[] = [];
   const logLines: string[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
@@ -89,30 +104,35 @@ export function scenario(options: ScenarioOptions = {}) {
     const user = body.messages.at(-1).content as string;
     const input = user.replace(USER_PREFIX, "");
     const request: SentRequest = {
+      kind: USER_PREFIX.test(user) ? "translation" : "brief",
       url,
       headers: init.headers as Record<string, string>,
       body,
+      system: body.messages[0].content,
       input,
       blocks: input.split(BATCH_JOINER),
     };
-    sent.push(request);
+    requests.push(request);
     inFlight++;
     maxInFlight = Math.max(maxInFlight, inFlight);
+    let abortListener: (() => void) | undefined;
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, options.latencyMs ?? LATENCY_MS);
-        init.signal?.addEventListener("abort", () => {
+        abortListener = () => {
           aborted++;
           if (!options.ignoreAbort) {
             clearTimeout(timer);
             reject(new DOMException("aborted", "AbortError"));
           }
-        });
+        };
+        init.signal?.addEventListener("abort", abortListener);
       });
     } finally {
+      if (abortListener) init.signal?.removeEventListener("abort", abortListener);
       inFlight--;
     }
-    const answer = reply(request);
+    const answer = request.kind === "brief" ? briefReply(request) : reply(request);
     return "content" in answer
       ? Response.json({ choices: [{ message: { role: "assistant", content: answer.content } }] })
       : Response.json(answer.body, { status: answer.status });
@@ -134,7 +154,7 @@ export function scenario(options: ScenarioOptions = {}) {
       return secrets[name];
     },
     env,
-    readDocument: () => undefined,
+    readDocument: (uri) => documents.get(uri),
     log: {
       info: (message) => logLines.push(message),
       error: (message) => logLines.push(message),
@@ -152,7 +172,12 @@ export function scenario(options: ScenarioOptions = {}) {
   return {
     twain,
     settings,
-    sent,
+    /** Every request, in the order it was sent. */
+    requests,
+    /** The translation requests, in the order they were sent. */
+    get sent() {
+      return requests.filter((request) => request.kind === "translation");
+    },
     logLines,
     get refreshes() {
       return refreshes;
@@ -163,8 +188,11 @@ export function scenario(options: ScenarioOptions = {}) {
     get aborted() {
       return aborted;
     },
-    /** Renders the way the preview does, with `env.currentDocument`. */
-    render: (uri: string, text: string) => md.render(text, { currentDocument: uri }),
+    /** Renders the way the preview does, with `env.currentDocument`; `text` becomes the document's current text. */
+    render: (uri: string, text: string) => {
+      documents.set(uri, text);
+      return md.render(text, { currentDocument: uri });
+    },
     /** Renders with no `env.currentDocument`. */
     renderWithoutDocument: (text: string) => md.render(text, {}),
     /** What the preview shows without the extension. */

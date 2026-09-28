@@ -8,7 +8,8 @@
 // Modified by markdown-twain, 2026-09-28:
 // - The HTML rule is replaced by a Markdown rule, since the input is inline
 //   Markdown.
-// - The webpage metadata section is dropped.
+// - The metadata section holds only the Document brief, in place of the
+//   webpage title and summary, and comes last.
 // - Tokens are filled in by functions instead of `{{token}}` substitution.
 // - The batch rules and the sentinel rule are always included, so single-Block
 //   requests use the same system prompt as batches.
@@ -18,9 +19,14 @@ export const BATCH_SEPARATOR = "%%";
 /** What the model answers for a Block already in the Target language. */
 export const NO_TRANSLATION_SENTINEL = "{{NO_TRANSLATION_NEEDED}}";
 
-/** The system prompt for translating into `targetLanguage` (an English language name). */
-export function translateSystemPrompt(targetLanguage: string): string {
-  return [defaultSystemPrompt(targetLanguage), BATCH_RULES, sentinelRule(targetLanguage)].join("\n\n");
+/**
+ * The system prompt for translating into `targetLanguage` (an English language
+ * name), with the document's `brief` inserted verbatim when there is one.
+ */
+export function translateSystemPrompt(targetLanguage: string, brief?: string): string {
+  const sections = [defaultSystemPrompt(targetLanguage), BATCH_RULES, sentinelRule(targetLanguage)];
+  if (brief !== undefined) sections.push(metadata(brief));
+  return sections.join("\n\n");
 }
 
 function defaultSystemPrompt(targetLanguage: string): string {
@@ -76,6 +82,11 @@ Direct translation without separators`;
 function sentinelRule(targetLanguage: string): string {
   return `## Already-translated Input Rule
 Output only ${NO_TRANSLATION_SENTINEL} when only non-translatable names, brands, handles, URLs, numbers, or code differ from ${targetLanguage}. A foreign-language phrase or clause must be translated.`;
+}
+
+function metadata(brief: string): string {
+  return `## Document Metadata for Context Awareness
+Document brief: ${brief}`;
 }
 
 /** The user message that precedes the input. */

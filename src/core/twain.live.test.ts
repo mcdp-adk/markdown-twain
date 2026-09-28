@@ -26,6 +26,7 @@ const SENTINEL = "{{NO_TRANSLATION_NEEDED}}";
 const USER_PREFIX = /^Translate to [^:\n]+:\n\n\n/;
 
 interface Exchange {
+  system: string;
   blocks: string[];
   segments: string[];
 }
@@ -40,7 +41,9 @@ function verbatimParts(markdown: string): string[] {
 it("translates the sample the way the prompt asks", { timeout: 300_000 }, async () => {
   if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY isn't set.");
 
+  const sample = readFileSync(SAMPLE, "utf8");
   const exchanges: Exchange[] = [];
+  const briefs: string[] = [];
   const errors: string[] = [];
   let finished!: () => void;
   const runEnded = new Promise<void>((resolve) => (finished = resolve));
@@ -49,10 +52,19 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
     fetch: async (url, init) => {
       const response = await fetch(url, init);
       const body = JSON.parse(init?.body as string);
-      const blocks = (body.messages.at(-1).content as string).replace(USER_PREFIX, "").split(BATCH_JOINER);
+      const user = body.messages.at(-1).content as string;
       const answer = (await response.clone().json()) as { choices?: { message?: { content?: string } }[] };
-      const content = answer.choices?.[0]?.message?.content ?? "";
-      exchanges.push({ blocks, segments: answerSegments(content.trim(), blocks.length) });
+      const content = (answer.choices?.[0]?.message?.content ?? "").trim();
+      if (!USER_PREFIX.test(user)) {
+        briefs.push(content);
+        return response;
+      }
+      const blocks = user.replace(USER_PREFIX, "").split(BATCH_JOINER);
+      exchanges.push({
+        system: body.messages[0].content,
+        blocks,
+        segments: answerSegments(content, blocks.length),
+      });
       return response;
     },
     refresh: () => {
@@ -66,7 +78,7 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
     settings: () => SETTINGS,
     secret: async () => undefined,
     env: process.env,
-    readDocument: () => undefined,
+    readDocument: (uri) => (uri === DOC ? sample : undefined),
     log: {
       info: () => {},
       error: (message) => errors.push(message),
@@ -75,7 +87,6 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
   const md = twain.markdownItPlugin(
     new MarkdownIt({ html: true, linkify: true }).use(frontMatter, () => {}).use(katex),
   );
-  const sample = readFileSync(SAMPLE, "utf8");
 
   twain.setDisplayMode("bilingual");
   md.render(sample, { currentDocument: DOC });
@@ -83,6 +94,10 @@ it("translates the sample the way the prompt asks", { timeout: 300_000 }, async 
   const html = md.render(sample, { currentDocument: DOC });
 
   expect(errors).toEqual([]);
+  // One Document brief, carried in every batch's system prompt.
+  expect(briefs).toHaveLength(1);
+  expect(briefs[0]).not.toBe("");
+  for (const { system } of exchanges) expect(system).toContain(`\nDocument brief: ${briefs[0]}`);
   // Segment counts match. The one exception is a batch whose Blocks all need no
   // translation, collapsed into a single sentinel: the per-Block fallback recovers it.
   expect(exchanges.some(({ blocks }) => blocks.length > 1)).toBe(true);
