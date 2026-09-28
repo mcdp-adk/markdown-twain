@@ -31,7 +31,7 @@ export interface SentRequest {
 }
 
 /** What the fake provider answers for one request. */
-export type Reply = { status: number; body: unknown } | { content: string };
+export type Reply = { status: number; body: unknown; headers?: Record<string, string> } | { content: string };
 
 export const USER_PREFIX = /^Translate to [^:\n]+:\n\n\n/;
 export const BATCH_JOINER = "\n\n%%\n\n";
@@ -103,8 +103,9 @@ export function scenario(options: ScenarioOptions = {}) {
   let aborted = 0;
 
   const fakeFetch = (async (url: string, init: RequestInit) => {
-    if (options.connectionFetch) return options.connectionFetch(url, init);
+    if (options.connectionFetch && init.method === "GET") return options.connectionFetch(url, init);
     const body = JSON.parse(init.body as string);
+    if (options.connectionFetch && body.stream === true) return options.connectionFetch(url, init);
     const user = body.messages.at(-1).content as string;
     const input = user.replace(USER_PREFIX, "");
     const request: SentRequest = {
@@ -139,7 +140,7 @@ export function scenario(options: ScenarioOptions = {}) {
     const answer = request.kind === "brief" ? briefReply(request) : reply(request);
     return "content" in answer
       ? Response.json({ choices: [{ message: { role: "assistant", content: answer.content } }] })
-      : Response.json(answer.body, { status: answer.status });
+      : Response.json(answer.body, { status: answer.status, headers: answer.headers });
   }) as typeof fetch;
 
   const twain = createTwain({

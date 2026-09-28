@@ -138,35 +138,146 @@ export function buildBriefRequest(
 export class RequestError extends Error {
   readonly status: number | undefined;
 
-  constructor(status: number | undefined, message: string) {
+  constructor(
+    status: number | undefined,
+    message: string,
+    readonly timedOut = false,
+  ) {
     super(message);
     this.status = status;
   }
 }
 
-/** Sends one request and returns the model's text, with a leading `<think>…</think>` stripped and trimmed. */
-export async function send(fetch: typeof globalThis.fetch, request: [string, RequestInit]): Promise<string> {
-  let response: Response;
+const ATTEMPT_TIMEOUT_MS = 120_000;
+const RETRY_DELAYS_MS = [1_000, 4_000] as const;
+const MAX_RETRY_AFTER_MS = 30_000;
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+function abortError(): DOMException {
+  return new DOMException("The request was aborted.", "AbortError");
+}
+
+function apiKeyFrom(request: [string, RequestInit]): string | undefined {
+  const authorization = new Headers(request[1].headers).get("Authorization");
+  return authorization?.match(/^Bearer (.+)$/i)?.[1];
+}
+
+function redact(message: string, apiKey: string | undefined): string {
+  return apiKey ? message.replaceAll(apiKey, "[redacted]") : message;
+}
+
+function networkError(error: unknown, apiKey: string | undefined): RequestError {
+  const source = error as { message?: string; cause?: { code?: string; message?: string } };
+  const cause = source?.cause;
+  const details = [cause?.code, cause?.message].filter(Boolean).join(" ");
+  return new RequestError(undefined, redact(details || source?.message || String(error), apiKey));
+}
+
+function timeoutError(): RequestError {
+  return new RequestError(undefined, `Request timed out after ${ATTEMPT_TIMEOUT_MS / 1_000} seconds.`, true);
+}
+
+function retryAfterMs(response: Response): number | undefined {
+  const value = response.headers.get("Retry-After");
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+}
+
+function wait(ms: number, signal: AbortSignal | null | undefined): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function attempt(
+  fetch: typeof globalThis.fetch,
+  request: [string, RequestInit],
+  apiKey: string | undefined,
+): Promise<{ response: Response; text: string }> {
+  const parentSignal = request[1].signal;
+  if (parentSignal?.aborted) throw abortError();
+  const controller = new AbortController();
+  let timedOut = false;
+  let rejectInterruption: (reason: unknown) => void = () => {};
+  const interruption = new Promise<never>((_, reject) => {
+    rejectInterruption = reject;
+  });
+  const onAbort = () => {
+    controller.abort();
+    rejectInterruption(abortError());
+  };
+  parentSignal?.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+    rejectInterruption(timeoutError());
+  }, ATTEMPT_TIMEOUT_MS);
   try {
-    response = await fetch(...request);
+    const response = await Promise.race([
+      (async () => {
+        const response = await fetch(request[0], { ...request[1], signal: controller.signal });
+        return { response, text: await response.text() };
+      })(),
+      interruption,
+    ]);
+    return response;
   } catch (error) {
-    if ((error as Error).name === "AbortError") throw error;
-    const cause = (error as { cause?: { code?: string; message?: string } }).cause;
-    throw new RequestError(
-      undefined,
-      cause ? [cause.code, cause.message].filter(Boolean).join(" ") : String(error),
-    );
+    if (parentSignal?.aborted) throw abortError();
+    if (timedOut) throw timeoutError();
+    if (error instanceof RequestError) throw error;
+    if ((error as Error)?.name === "AbortError") throw abortError();
+    throw networkError(error, apiKey);
+  } finally {
+    clearTimeout(timer);
+    parentSignal?.removeEventListener("abort", onAbort);
   }
-  const text = await response.text();
-  if (!response.ok) throw new RequestError(response.status, providerMessage(text));
-  let content: unknown;
-  try {
-    content = JSON.parse(text)?.choices?.[0]?.message?.content;
-  } catch {
-    throw new RequestError(response.status, `Unreadable response: ${text.slice(0, 200)}`);
+}
+
+/** Sends a request with transient-failure retries and returns the model's text. */
+export async function send(fetch: typeof globalThis.fetch, request: [string, RequestInit]): Promise<string> {
+  const signal = request[1].signal;
+  const apiKey = apiKeyFrom(request);
+  for (let retry = 0; ; retry++) {
+    let response: Response;
+    let text: string;
+    try {
+      ({ response, text } = await attempt(fetch, request, apiKey));
+    } catch (error) {
+      if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
+      if (retry >= RETRY_DELAYS_MS.length) throw error;
+      await wait(RETRY_DELAYS_MS[retry], signal);
+      continue;
+    }
+    if (!response.ok) {
+      const error = new RequestError(response.status, redact(providerMessage(text), apiKey));
+      if (!RETRYABLE_STATUSES.has(response.status) || retry >= RETRY_DELAYS_MS.length) throw error;
+      const retryAfter = retryAfterMs(response);
+      if (retryAfter !== undefined && retryAfter > MAX_RETRY_AFTER_MS) throw error;
+      await wait(retryAfter ?? RETRY_DELAYS_MS[retry], signal);
+      continue;
+    }
+    let content: unknown;
+    try {
+      content = JSON.parse(text)?.choices?.[0]?.message?.content;
+    } catch {
+      throw new RequestError(response.status, `Unreadable response: ${redact(text.slice(0, 200), apiKey)}`);
+    }
+    if (typeof content !== "string") throw new RequestError(response.status, "No content in response");
+    return content.replace(/^\s*<think>[\s\S]*?<\/think>/, "").trim();
   }
-  if (typeof content !== "string") throw new RequestError(response.status, "No content in response");
-  return content.replace(/^\s*<think>[\s\S]*?<\/think>/, "").trim();
 }
 
 /** `error.message`, then `error` as a string, then `message`, then the raw body. */

@@ -73,10 +73,13 @@ export type Status =
   | { kind: "idle" }
   | { kind: "preparing" }
   | { kind: "translating"; landed: number; total: number }
+  | { kind: "halted"; error: ReturnType<typeof classifyConnectionError> }
   | { kind: "someFailed"; count: number; total: number };
 
 /** Fired at most once per run, when it ends. */
-export type RunEnd = { kind: "finishedWithFailures"; count: number; total: number };
+export type RunEnd =
+  | { kind: "halted"; error: ReturnType<typeof classifyConnectionError> }
+  | { kind: "finishedWithFailures"; count: number; total: number };
 
 export interface Twain {
   /** The plugin for the built-in preview's markdown-it, through `extendMarkdownIt`. */
@@ -101,6 +104,7 @@ interface Miss {
   cacheKey: string;
   input: string;
   context: TranslationContext;
+  settings: Settings;
 }
 
 /** Block `token.content` → its request input. */
@@ -144,7 +148,7 @@ export function createTwain(deps: TwainDeps): Twain {
   const cache = new Map<string, CacheEntry>();
   /** Per brief key, the document's translation context with its Document brief; frozen once it lands. */
   const briefs = new Map<string, TranslationContext>();
-  /** Cache keys and brief keys whose request failed; their Blocks render as source and aren't misses. */
+  /** Cache keys for empty Block answers; they render as source until a retry. */
   const failed = new Set<string>();
   /** Per `env.currentDocument`, its latest render. */
   const latestRenders = new Map<string, DocumentRender>();
@@ -152,11 +156,13 @@ export function createTwain(deps: TwainDeps): Twain {
   let run: Run | undefined;
   /** Blocks failed since the last retry, out of the Blocks of the runs that ended since then. */
   let failuresSinceRetry = { count: 0, total: 0 };
+  let halted: ReturnType<typeof classifyConnectionError> | undefined;
   let status: Status = { kind: "idle" };
   const statusListeners: ((status: Status) => void)[] = [];
   const runEndListeners: ((event: RunEnd) => void)[] = [];
 
   function currentStatus(): Status {
+    if (halted) return { kind: "halted", error: halted };
     if (run) {
       if (run.blocksLanded === 0 && run.awaitingBrief.size > 0) return { kind: "preparing" };
       return { kind: "translating", landed: run.blocksLanded, total: run.blocksTotal };
@@ -177,6 +183,7 @@ export function createTwain(deps: TwainDeps): Twain {
   function clearFailures(): void {
     failed.clear();
     failuresSinceRetry = { count: 0, total: 0 };
+    halted = undefined;
     if (run) run.blocksFailed = 0;
   }
 
@@ -207,9 +214,10 @@ export function createTwain(deps: TwainDeps): Twain {
 
   function endQuietPeriod(): void {
     quietTimer = undefined;
+    if (halted) return;
     for (const render of latestRenders.values()) {
       const context = briefs.get(render.briefKey);
-      if (context) enqueueBatches(context, render.misses);
+      if (context) enqueueBatches(context, render.misses, render.settings);
       // A render with no misses still replaces the misses waiting for a brief in flight.
       else if (render.misses.size > 0 || run?.pending.has(render.briefKey)) enqueueBrief(render);
     }
@@ -234,9 +242,9 @@ export function createTwain(deps: TwainDeps): Twain {
   }
 
   /** Enqueues a document's misses that aren't cached, failed, or pending, packed into batches. */
-  function enqueueBatches(context: TranslationContext, misses: BlockInputs): void {
+  function enqueueBatches(context: TranslationContext, misses: BlockInputs, settings: Settings): void {
     const fresh = [...misses]
-      .map(([content, input]) => ({ cacheKey: cacheKeyOf(context, content), input, context }))
+      .map(([content, input]) => ({ cacheKey: cacheKeyOf(context, content), input, context, settings }))
       .filter(({ cacheKey }) => !cache.has(cacheKey) && !failed.has(cacheKey) && !run?.pending.has(cacheKey));
     if (fresh.length === 0) return;
     const current = currentRun();
@@ -255,6 +263,7 @@ export function createTwain(deps: TwainDeps): Twain {
   }
 
   function pump(current: Run): void {
+    if (current !== run || halted || current.controller.signal.aborted) return;
     while (current.inFlight < MAX_IN_FLIGHT) {
       const request = current.queue.shift();
       if (!request) return;
@@ -265,6 +274,7 @@ export function createTwain(deps: TwainDeps): Twain {
 
   /** After a request's results are recorded: ends the run once nothing is pending. */
   function landed(current: Run): void {
+    if (current !== run) return;
     if (current.pending.size > 0) {
       pump(current);
       updateStatus();
@@ -285,7 +295,7 @@ export function createTwain(deps: TwainDeps): Twain {
   }
 
   async function dispatchBrief(current: Run, render: DocumentRender): Promise<void> {
-    let brief: string | undefined;
+    let brief: string;
     try {
       const text = deps.readDocument(render.uri);
       if (text === undefined) throw new Error("The document's text can't be read");
@@ -297,7 +307,17 @@ export function createTwain(deps: TwainDeps): Twain {
         buildBriefRequest(render.base, input, apiKey, current.controller.signal),
       );
     } catch (error) {
-      if (current === run) logRequestFailure("Document brief", error, render.base, render.uri);
+      if (current === run) {
+        const covered = current.awaitingBrief.get(render.briefKey)?.size ?? render.misses.size;
+        logRequestFailure(
+          "Document brief",
+          error,
+          render.base,
+          covered === 1 ? "1 Block" : `${covered} Blocks`,
+        );
+        haltRun(current, error, render.settings);
+      }
+      return;
     }
     // Aborted: late results are discarded.
     if (current !== run) return;
@@ -309,7 +329,7 @@ export function createTwain(deps: TwainDeps): Twain {
     const context = brief ? translationContext(render.settings, brief) : undefined;
     if (context) {
       briefs.set(render.briefKey, context);
-      enqueueBatches(context, misses);
+      enqueueBatches(context, misses, render.settings);
     } else {
       if (brief === "") {
         deps.log.error(`A Document brief came back empty (${render.base.url}, model ${render.base.model})`);
@@ -320,7 +340,7 @@ export function createTwain(deps: TwainDeps): Twain {
   }
 
   async function dispatchBatch(current: Run, batch: Miss[]): Promise<void> {
-    const { context } = batch[0];
+    const { context, settings } = batch[0];
     let segments: string[] | undefined;
     try {
       const apiKey = await resolveApiKey(deps.secret, deps.env, context.keySource);
@@ -336,7 +356,9 @@ export function createTwain(deps: TwainDeps): Twain {
           context,
           batch.length === 1 ? "1 Block" : `${batch.length} Blocks`,
         );
+        haltRun(current, error, settings);
       }
+      return;
     }
     // Aborted: late results are discarded.
     if (current !== run) return;
@@ -383,6 +405,19 @@ export function createTwain(deps: TwainDeps): Twain {
     );
   }
 
+  function haltRun(current: Run, error: unknown, settings: Settings): void {
+    if (current !== run) return;
+    const classified = classifyConnectionError(error, settings, settings.reasoningEffort !== "default");
+    halted = classified;
+    run = undefined;
+    stopQuietPeriod();
+    current.controller.abort();
+    deps.refresh();
+    updateStatus();
+    const event: RunEnd = { kind: "halted", error: classified };
+    for (const listener of runEndListeners) listener(event);
+  }
+
   function abortRun(): void {
     run?.controller.abort();
     run = undefined;
@@ -409,7 +444,7 @@ export function createTwain(deps: TwainDeps): Twain {
         if (!failed.has(briefKey)) {
           documentRender = { uri, settings, base, briefKey, misses: new Map() };
           latestRenders.set(uri, documentRender);
-          restartQuietPeriod();
+          if (!halted) restartQuietPeriod();
         }
       }
 
@@ -463,12 +498,19 @@ export function createTwain(deps: TwainDeps): Twain {
         settings,
         keyChoice,
       ),
-    testConnection: (settings, keyChoice) =>
-      testConnection(
+    testConnection: async (settings, keyChoice) => {
+      const elapsed = await testConnection(
         { fetch: deps.fetch, secret: deps.secret, env: deps.env, now: () => deps.clock.now() },
         settings,
         keyChoice,
-      ),
+      );
+      if (mode !== "originalOnly") {
+        clearFailures();
+        deps.refresh();
+        updateStatus();
+      }
+      return elapsed;
+    },
     classifyConnectionError,
     setDisplayMode(next) {
       if (next === "originalOnly") abortRun();

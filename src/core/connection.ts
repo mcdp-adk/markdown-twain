@@ -212,7 +212,11 @@ export async function testConnection(
 
 const PROXY_HINT = "Check VS Code's `http.proxy` setting.";
 
-export function classifyConnectionError(error: unknown, settings: ConnectionSettings): ClassifiedError {
+export function classifyConnectionError(
+  error: unknown,
+  settings: ConnectionSettings,
+  requestHadEffort = false,
+): ClassifiedError {
   const issue = error as {
     status?: number;
     message?: string;
@@ -230,7 +234,15 @@ export function classifyConnectionError(error: unknown, settings: ConnectionSett
           : message,
       fix: "selectModel",
     };
-  if (status === 400 && error instanceof ConnectionRequestError && error.hadEffort)
+  // Some providers return 400 for an unknown model. The recovery action is still Select Model.
+  if (
+    status === 400 &&
+    /\b(?:not a valid|invalid|unknown|unsupported) model(?: id)?\b|\bmodel(?: id)?\b.{0,40}\b(?:invalid|unknown|not found|does not exist)\b/i.test(
+      message,
+    )
+  )
+    return { message, fix: "selectModel" };
+  if (status === 400 && (error instanceof ConnectionRequestError ? error.hadEffort : requestHadEffort))
     return {
       message: `${message}. Reasoning effort is set to \`${settings.reasoningEffort}\`; try \`default\`.`,
       fix: "setReasoningEffort",
