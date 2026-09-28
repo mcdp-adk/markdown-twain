@@ -2,8 +2,11 @@
 // shown. It never imports `vscode`; the adapter injects everything it needs.
 
 import type { MarkdownIt, Renderer, Token } from "markdown-it";
+import { NO_TRANSLATION_SENTINEL } from "./prompt.ts";
 import {
   RequestError,
+  answerSegments,
+  batchInput,
   buildRequest,
   requestInput,
   send,
@@ -19,6 +22,10 @@ export type DisplayMode = "originalOnly" | "bilingual" | "translationOnly";
 export const QUIET_MS = 1000;
 /** Requests in flight at once, per window. */
 const MAX_IN_FLIGHT = 4;
+/** Blocks per request, at most. */
+const MAX_BATCH_BLOCKS = 4;
+/** Characters of Block text per request, at most, unless a single Block is longer. */
+const MAX_BATCH_CHARS = 1000;
 
 export interface Clock {
   setTimeout(callback: () => void, ms: number): unknown;
@@ -58,18 +65,22 @@ interface Miss {
   context: TranslationContext;
 }
 
+/** `noTranslationNeeded` comes from the sentinel or an echo, and renders as the source in every mode. */
+type CacheEntry = { kind: "translation"; text: string } | { kind: "noTranslationNeeded" };
+
 /** From the pending set going non-empty until it empties, or until it is aborted. */
 interface Run {
   controller: AbortController;
   /** Cache keys queued or in flight. */
   pending: Set<string>;
-  queue: Miss[];
+  /** Requests waiting for a free slot, each the Blocks it carries, in document order. */
+  queue: Miss[][];
   inFlight: number;
 }
 
 export function createTwain(deps: TwainDeps): Twain {
   let mode: DisplayMode = "originalOnly";
-  const cache = new Map<string, string>();
+  const cache = new Map<string, CacheEntry>();
   /** Cache keys whose request failed; they render as source and aren't misses. */
   const failed = new Set<string>();
   /** Per `env.currentDocument`, the misses of its latest render. */
@@ -84,11 +95,11 @@ export function createTwain(deps: TwainDeps): Twain {
   ): string | undefined {
     if (!context) return undefined;
     const cacheKey = `${context.key}\n${token.content}`;
-    const translation = cache.get(cacheKey);
-    if (translation === undefined && misses && !failed.has(cacheKey)) {
+    const entry = cache.get(cacheKey);
+    if (entry === undefined && misses && !failed.has(cacheKey)) {
       misses.set(cacheKey, { cacheKey, input: requestInput(token.content), context });
     }
-    return translation;
+    return entry?.kind === "translation" ? entry.text : undefined;
   }
 
   function stopQuietPeriod(): void {
@@ -104,13 +115,13 @@ export function createTwain(deps: TwainDeps): Twain {
   function endQuietPeriod(): void {
     quietTimer = undefined;
     for (const misses of latestMisses.values()) {
-      for (const miss of misses.values()) {
-        const { cacheKey } = miss;
-        if (cache.has(cacheKey) || failed.has(cacheKey) || run?.pending.has(cacheKey)) continue;
-        run ??= { controller: new AbortController(), pending: new Set(), queue: [], inFlight: 0 };
-        run.pending.add(cacheKey);
-        run.queue.push(miss);
-      }
+      const fresh = [...misses.values()].filter(
+        ({ cacheKey }) => !cache.has(cacheKey) && !failed.has(cacheKey) && !run?.pending.has(cacheKey),
+      );
+      if (fresh.length === 0) continue;
+      run ??= { controller: new AbortController(), pending: new Set(), queue: [], inFlight: 0 };
+      for (const miss of fresh) run.pending.add(miss.cacheKey);
+      run.queue.push(...packBatches(fresh));
     }
     latestMisses.clear();
     if (run) pump(run);
@@ -123,23 +134,42 @@ export function createTwain(deps: TwainDeps): Twain {
     }
   }
 
-  async function dispatch(current: Run, miss: Miss): Promise<void> {
-    let translation: string | undefined;
+  async function dispatch(current: Run, batch: Miss[]): Promise<void> {
+    const { context } = batch[0];
+    let segments: string[] | undefined;
     try {
-      const apiKey = await resolveApiKey(miss.context.keySource);
-      const request = buildRequest(miss.context, miss.input, apiKey, current.controller.signal);
-      translation = (await send(deps.fetch, request)) || undefined;
-      if (translation === undefined) throw new RequestError(undefined, "The translation is empty.");
+      const apiKey = await resolveApiKey(context.keySource);
+      const input = batchInput(batch.map((miss) => miss.input));
+      const request = buildRequest(context, input, apiKey, current.controller.signal);
+      segments = answerSegments(await send(deps.fetch, request), batch.length);
     } catch (error) {
-      if (current === run) logFailure(error, miss.context);
+      if (current === run) logRequestFailure(error, context, batch.length);
     }
     // Aborted: late results are discarded.
     if (current !== run) return;
-
-    if (translation === undefined) failed.add(miss.cacheKey);
-    else cache.set(miss.cacheKey, translation);
-    current.pending.delete(miss.cacheKey);
     current.inFlight--;
+
+    if (segments && segments.length !== batch.length) {
+      deps.log.info(
+        `A batch of ${batch.length} Blocks came back as ${segments.length} segments; sending each Block on its own.`,
+      );
+      current.queue.push(...batch.map((miss) => [miss]));
+      pump(current);
+      return;
+    }
+    batch.forEach((miss, i) => {
+      const segment = segments?.[i];
+      // Models often echo a Block already in the Target language instead of answering with the sentinel.
+      if (segment === NO_TRANSLATION_SENTINEL || segment === miss.input) {
+        cache.set(miss.cacheKey, { kind: "noTranslationNeeded" });
+      } else if (segment) {
+        cache.set(miss.cacheKey, { kind: "translation", text: segment });
+      } else {
+        if (segments) deps.log.error(`A Block came back empty (${context.url}, model ${context.model})`);
+        failed.add(miss.cacheKey);
+      }
+      current.pending.delete(miss.cacheKey);
+    });
     if (current.pending.size === 0) {
       run = undefined;
       deps.refresh();
@@ -153,11 +183,12 @@ export function createTwain(deps: TwainDeps): Twain {
   }
 
   /** Logs the status, the provider's message, the base URL, and the model; never the key or headers. */
-  function logFailure(error: unknown, context: TranslationContext): void {
+  function logRequestFailure(error: unknown, context: TranslationContext, blockCount: number): void {
     const status = error instanceof RequestError && error.status !== undefined ? `${error.status} ` : "";
     const message = error instanceof Error ? error.message : String(error);
+    const blocks = blockCount === 1 ? "1 Block" : `${blockCount} Blocks`;
     deps.log.error(
-      `Translation request failed: ${status}${message} (1 Block, ${context.url}, model ${context.model})`,
+      `Translation request failed: ${status}${message} (${blocks}, ${context.url}, model ${context.model})`,
     );
   }
 
@@ -235,6 +266,31 @@ export function createTwain(deps: TwainDeps): Twain {
       return mode;
     },
   };
+}
+
+/**
+ * Packs one document's misses into requests, in document order: up to
+ * MAX_BATCH_BLOCKS Blocks or MAX_BATCH_CHARS characters, sharing one context.
+ */
+function packBatches(misses: Miss[]): Miss[][] {
+  const batches: Miss[][] = [];
+  let batch: Miss[] = [];
+  let chars = 0;
+  for (const miss of misses) {
+    const fits =
+      batch.length < MAX_BATCH_BLOCKS &&
+      chars + miss.input.length <= MAX_BATCH_CHARS &&
+      batch[0]?.context.key === miss.context.key;
+    if (batch.length > 0 && !fits) {
+      batches.push(batch);
+      batch = [];
+      chars = 0;
+    }
+    batch.push(miss);
+    chars += miss.input.length;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
 }
 
 /**

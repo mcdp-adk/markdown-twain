@@ -2,16 +2,28 @@
 //
 // Source: Read Frog, https://github.com/mengxi-ream/read-frog
 // Commit b4a45b9, file src/utils/constants/prompt.ts
-// (DEFAULT_TRANSLATE_SYSTEM_PROMPT and DEFAULT_TRANSLATE_PROMPT).
+// (DEFAULT_TRANSLATE_SYSTEM_PROMPT, DEFAULT_TRANSLATE_PROMPT,
+// DEFAULT_BATCH_TRANSLATE_PROMPT, and DEFAULT_SENTINEL_TRANSLATE_PROMPT).
 // Original license: GPL-3.0.
 // Modified by markdown-twain, 2026-09-28:
 // - The HTML rule is replaced by a Markdown rule, since the input is inline
 //   Markdown.
 // - The webpage metadata section is dropped.
 // - Tokens are filled in by functions instead of `{{token}}` substitution.
+// - The batch rules and the sentinel rule are always included, so single-Block
+//   requests use the same system prompt as batches.
+
+/** Joins the Blocks of a batch; the model answers with the same separator. */
+export const BATCH_SEPARATOR = "%%";
+/** What the model answers for a Block already in the Target language. */
+export const NO_TRANSLATION_SENTINEL = "{{NO_TRANSLATION_NEEDED}}";
 
 /** The system prompt for translating into `targetLanguage` (an English language name). */
 export function translateSystemPrompt(targetLanguage: string): string {
+  return [defaultSystemPrompt(targetLanguage), BATCH_RULES, sentinelRule(targetLanguage)].join("\n\n");
+}
+
+function defaultSystemPrompt(targetLanguage: string): string {
   return `You are a professional ${targetLanguage} native translator who needs to fluently translate text into ${targetLanguage}.
 
 ## Translation Rules
@@ -19,6 +31,51 @@ export function translateSystemPrompt(targetLanguage: string): string {
 2. The returned translation must maintain exactly the same number of paragraphs and format as the original text.
 3. The input is inline Markdown. Keep all Markdown syntax, translate link text, and keep URLs and inline code unchanged.
 4. For content that should not be translated (such as proper nouns, code, etc.), keep the original text.`;
+}
+
+// Every output slot of the example keeps a real translation: Read Frog found
+// that showing the sentinel in one taught models to overuse it.
+const BATCH_RULES = `## Multi-paragraph Translation Rules
+1. If input contains a standalone line containing only ${BATCH_SEPARATOR}, use a standalone ${BATCH_SEPARATOR} line in your output. If input has no standalone ${BATCH_SEPARATOR} line, don't use ${BATCH_SEPARATOR} in your output.
+2. **CRITICAL**: Treat ${BATCH_SEPARATOR} as a separator only when it appears on its own line. Do not treat ${BATCH_SEPARATOR} as a separator when it appears inside normal text, code, quotes, or punctuation.
+
+## OUTPUT FORMAT:
+- **Single paragraph input** → Output translation directly (no separators, no extra text)
+- **Multi-paragraph input (input uses standalone ${BATCH_SEPARATOR} separator lines)** → Put ${BATCH_SEPARATOR} on its own line between translations
+
+## Examples
+
+### Multi-paragraph Input:
+Paragraph A
+
+${BATCH_SEPARATOR}
+
+Paragraph B
+
+${BATCH_SEPARATOR}
+
+Paragraph C
+
+### Multi-paragraph Output:
+Translation A
+
+${BATCH_SEPARATOR}
+
+Translation B
+
+${BATCH_SEPARATOR}
+
+Translation C
+
+### Single paragraph Input:
+Single paragraph content
+
+### Single paragraph Output:
+Direct translation without separators`;
+
+function sentinelRule(targetLanguage: string): string {
+  return `## Already-translated Input Rule
+Output only ${NO_TRANSLATION_SENTINEL} when only non-translatable names, brands, handles, URLs, numbers, or code differ from ${targetLanguage}. A foreign-language phrase or clause must be translated.`;
 }
 
 /** The user message that precedes the input. */

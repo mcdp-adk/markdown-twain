@@ -20,14 +20,23 @@ export interface SentRequest {
     messages: { role: string; content: string }[];
     [field: string]: unknown;
   };
-  /** The Block text after the `Translate to …:` prefix. */
+  /** The text after the `Translate to …:` prefix. */
   input: string;
+  /** The Blocks in `input`, split on the batch separator. */
+  blocks: string[];
 }
 
 /** What the fake provider answers for one request. */
 export type Reply = { status: number; body: unknown } | { content: string };
 
 export const USER_PREFIX = /^Translate to [^:\n]+:\n\n\n/;
+export const BATCH_JOINER = "\n\n%%\n\n";
+export const SENTINEL = "{{NO_TRANSLATION_NEEDED}}";
+
+/** A batch answer: one segment per Block, joined the way the prompt asks. */
+export function joinSegments(segments: string[]): string {
+  return segments.join(BATCH_JOINER);
+}
 
 /** The fake model's translation: the input, marked, with its Markdown intact. */
 export function fakeTranslation(input: string): string {
@@ -40,7 +49,7 @@ export interface ScenarioOptions {
   env?: Record<string, string | undefined>;
   /** How long the fake provider takes to answer. */
   latencyMs?: number;
-  /** Overrides the fake provider's answer; the default translates. */
+  /** Overrides the fake provider's answer; the default translates each Block. */
   reply?: (request: SentRequest) => Reply;
 }
 
@@ -59,7 +68,8 @@ export function scenario(options: ScenarioOptions = {}) {
   };
   const env = options.env ?? { OPENROUTER_API_KEY: "sk-or-env-key" };
   const secrets = options.secrets ?? {};
-  const reply = options.reply ?? ((request) => ({ content: fakeTranslation(request.input) }));
+  const reply =
+    options.reply ?? ((request) => ({ content: joinSegments(request.blocks.map(fakeTranslation)) }));
 
   const sent: SentRequest[] = [];
   const logLines: string[] = [];
@@ -70,11 +80,13 @@ export function scenario(options: ScenarioOptions = {}) {
   const fakeFetch = (async (url: string, init: RequestInit) => {
     const body = JSON.parse(init.body as string);
     const user = body.messages.at(-1).content as string;
+    const input = user.replace(USER_PREFIX, "");
     const request: SentRequest = {
       url,
       headers: init.headers as Record<string, string>,
       body,
-      input: user.replace(USER_PREFIX, ""),
+      input,
+      blocks: input.split(BATCH_JOINER),
     };
     sent.push(request);
     inFlight++;

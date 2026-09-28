@@ -1,4 +1,4 @@
-import { translateSystemPrompt, translateUserPrefix } from "./prompt.ts";
+import { BATCH_SEPARATOR, translateSystemPrompt, translateUserPrefix } from "./prompt.ts";
 import {
   CUSTOM_PROVIDER_ID,
   PROVIDER_PRESETS,
@@ -88,6 +88,23 @@ export function requestInput(content: string): string {
     })
     .map((line, i) => (i === 0 ? line : line.trimStart()))
     .join("");
+}
+
+/** A line holding only the batch separator. */
+const SEPARATOR_LINE = new RegExp(`^[ \\t]*${BATCH_SEPARATOR}[ \\t]*\\r?$`, "m");
+
+/** One request input for a batch of Block inputs, joined with the batch separator. */
+export function batchInput(inputs: string[]): string {
+  return inputs.join(`\n\n${BATCH_SEPARATOR}\n\n`);
+}
+
+/**
+ * The answer to a batch of `blockCount` Blocks, split on separator lines into
+ * trimmed segments. A single Block's answer is its one segment, so its
+ * per-Block fallback can't mismatch again.
+ */
+export function answerSegments(answer: string, blockCount: number): string[] {
+  return blockCount === 1 ? [answer] : answer.split(SEPARATOR_LINE).map((segment) => segment.trim());
 }
 
 export function buildRequest(

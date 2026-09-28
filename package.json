@@ -474,6 +474,7 @@
     "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --platform=node --format=cjs --target=node20 --external:vscode --sourcemap",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:live": "vitest run --config vitest.live.config.mts",
     "package": "vsce package --no-dependencies",
     "vscode:prepublish": "pnpm build",
     "dev-host": "pnpm build && node scripts/dev-host.mjs",
