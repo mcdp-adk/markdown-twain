@@ -1,6 +1,6 @@
 // The Connection setup: the guided steps that replace the LLM connection. It
-// decides every step and what the steps change; the adapter shows the prompts
-// through a Prompter and applies the result.
+// decides every step and applies what the steps change; the adapter shows the
+// prompts through a Prompter and provides storage and feedback.
 
 import {
   type ConnectionDeps,
@@ -56,10 +56,92 @@ export interface Prompter {
   input(options: InputOptions): Promise<StepResult<string>>;
 }
 
-/** What a finished command changes: the settings to write, in order, and then the saved key. */
-export interface SetupResult {
+/** The changes produced by a finished prompt; completion applies the key first. */
+interface SetupResult {
   settings: Partial<ConnectionSettings>;
   secret?: { kind: "store"; name: string; value: string } | { kind: "delete"; name: string };
+}
+
+export interface ConnectionSetupDeps extends ConnectionDeps {
+  settings: () => ConnectionSettings;
+  updateSetting: <K extends keyof ConnectionSettings>(
+    field: K,
+    value: ConnectionSettings[K],
+  ) => Promise<void>;
+  storeSecret: (name: string, value: string) => Promise<void>;
+  deleteSecret: (name: string) => Promise<void>;
+  retryTranslation: () => void;
+  showInformation: (message: string) => Promise<void>;
+  showFailure: (failure: ConnectionFailure) => Promise<void>;
+}
+
+export interface ConnectionSetup {
+  setUp(): Promise<void>;
+  selectModel(): Promise<void>;
+  setReasoningEffort(): Promise<void>;
+  setApiKey(): Promise<void>;
+  clearApiKey(): Promise<void>;
+  testConnection(): Promise<void>;
+}
+
+type DraftCommand = (
+  deps: ConnectionDeps,
+  prompter: Prompter,
+  settings: ConnectionSettings,
+) => Promise<SetupResult | undefined>;
+
+function providerLabel(provider: string): string {
+  return PROVIDER_PRESETS.find((preset) => preset.id === provider)?.label ?? "Custom";
+}
+
+/** Runs every setup command against the current stored connection. */
+export function createConnectionSetup(deps: ConnectionSetupDeps, prompter: Prompter): ConnectionSetup {
+  async function showTestResult(): Promise<void> {
+    const settings = deps.settings();
+    try {
+      const elapsed = await openConnection(deps, settings).ping();
+      deps.retryTranslation();
+      const effort = settings.reasoningEffort === "default" ? "" : ` · effort ${settings.reasoningEffort}`;
+      await deps.showInformation(
+        `Connected to ${providerLabel(settings.provider)} · ${settings.model}${effort}. First token after ${elapsed} ms`,
+      );
+    } catch (error) {
+      if (!(error instanceof ConnectionFailure)) throw error;
+      await deps.showFailure(error);
+    }
+  }
+
+  const run = (command: DraftCommand) => async (): Promise<void> => {
+    const result = await command(deps, prompter, deps.settings());
+    if (!result) return;
+    const { secret } = result;
+    if (secret?.kind === "store") await deps.storeSecret(secret.name, secret.value);
+    if (secret?.kind === "delete") await deps.deleteSecret(secret.name);
+    for (const [field, value] of Object.entries(result.settings)) {
+      await deps.updateSetting(field as keyof ConnectionSettings, value);
+    }
+    await showTestResult();
+  };
+
+  async function clearApiKey(): Promise<void> {
+    const settings = deps.settings();
+    const { secretName } = keySource(settings);
+    if (!(await deps.secret(secretName))) {
+      await deps.showInformation(`No saved API key for ${providerLabel(settings.provider)}.`);
+      return;
+    }
+    await deps.deleteSecret(secretName);
+    await showTestResult();
+  }
+
+  return {
+    setUp: run(setUpConnection),
+    selectModel: run(selectModel),
+    setReasoningEffort: run(setReasoningEffort),
+    setApiKey: run(setApiKey),
+    clearApiKey,
+    testConnection: showTestResult,
+  };
 }
 
 type SetupStep = "provider" | "baseUrl" | "apiKey" | "model" | "reasoningEffort";
@@ -67,7 +149,7 @@ type SetupStep = "provider" | "baseUrl" | "apiKey" | "model" | "reasoningEffort"
 const SETTING_FIELDS = ["provider", "customBaseUrl", "customApiKeyEnv", "model", "reasoningEffort"] as const;
 
 /** Set Up LLM Connection: every step, with Back; undefined when cancelled. */
-export async function setUpConnection(
+async function setUpConnection(
   deps: ConnectionDeps,
   prompter: Prompter,
   original: ConnectionSettings,
@@ -135,7 +217,7 @@ export async function setUpConnection(
 }
 
 /** Select Model: the model step alone, which always writes the model. */
-export async function selectModel(
+async function selectModel(
   deps: ConnectionDeps,
   prompter: Prompter,
   settings: ConnectionSettings,
@@ -147,7 +229,7 @@ export async function selectModel(
 }
 
 /** Set Reasoning Effort: the effort step alone, which always writes the effort. */
-export async function setReasoningEffort(
+async function setReasoningEffort(
   _deps: ConnectionDeps,
   prompter: Prompter,
   settings: ConnectionSettings,
@@ -157,7 +239,7 @@ export async function setReasoningEffort(
 }
 
 /** Set API Key: the key step alone; for a Custom provider it always writes the environment variable read. */
-export async function setApiKey(
+async function setApiKey(
   deps: ConnectionDeps,
   prompter: Prompter,
   settings: ConnectionSettings,

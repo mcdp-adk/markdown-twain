@@ -3,21 +3,18 @@
 
 import type { MarkdownIt } from "markdown-it";
 import * as vscode from "vscode";
-import { type ConnectionDeps, ConnectionFailure, keySource, openConnection } from "./core/connection.ts";
+import type { ConnectionDeps } from "./core/connection.ts";
 import {
   type Choice,
+  createConnectionSetup,
   type InputOptions,
   type Prompter,
   type StepOptions,
   type StepResult,
-  selectModel,
-  setApiKey,
-  setReasoningEffort,
-  setUpConnection,
 } from "./core/connection-setup.ts";
-import { PROVIDER_PRESETS, type ReasoningEffort } from "./core/providers.ts";
+import type { ReasoningEffort } from "./core/providers.ts";
 import type { Settings } from "./core/request.ts";
-import { createTwain, type DisplayMode, type Failure, type Status, type Twain } from "./core/twain.ts";
+import { createTwain, type DisplayMode, type Failure, type Status } from "./core/twain.ts";
 
 const FIX_ACTIONS = {
   setUpConnection: ["Set Up LLM Connection", "markdownTwain.setUpConnection"],
@@ -85,7 +82,31 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
     );
     if (selected) await setDisplayMode(selected.mode);
   };
-  const connection = connectionCommands(context, twain, deps);
+  const connection = createConnectionSetup(
+    {
+      ...deps,
+      settings: readSettings,
+      updateSetting: async (field, value) => {
+        await vscode.workspace
+          .getConfiguration("markdownTwain")
+          .update(field, value, vscode.ConfigurationTarget.Global);
+      },
+      storeSecret: async (name, value) => context.secrets.store(name, value),
+      deleteSecret: async (name) => context.secrets.delete(name),
+      retryTranslation: () => twain.retry(),
+      showInformation: async (message) => {
+        await vscode.window.showInformationMessage(message);
+      },
+      showFailure: async (failure) => {
+        const fix = failure.fix ? FIX_ACTIONS[failure.fix] : undefined;
+        const selected = fix
+          ? await vscode.window.showErrorMessage(failure.message, fix[0])
+          : await vscode.window.showErrorMessage(failure.message);
+        if (fix && selected === fix[0]) await vscode.commands.executeCommand(fix[1]);
+      },
+    },
+    prompter,
+  );
 
   // Between the language mode item (100.1) and `status.editor.info` (100).
   const statusItem = vscode.window.createStatusBarItem(
@@ -269,65 +290,4 @@ function input(options: InputOptions): Promise<StepResult<string>> {
     box.onDidHide(() => finish({ kind: "cancel" }));
     box.show();
   });
-}
-
-function providerLabel(provider: string): string {
-  return PROVIDER_PRESETS.find((preset) => preset.id === provider)?.label ?? "Custom";
-}
-
-function connectionCommands(context: vscode.ExtensionContext, twain: Twain, deps: ConnectionDeps) {
-  const config = () => vscode.workspace.getConfiguration("markdownTwain");
-
-  async function showTestResult(): Promise<void> {
-    const settings = readSettings();
-    try {
-      const elapsed = await openConnection(deps, settings).ping();
-      twain.retry();
-      const effort = settings.reasoningEffort === "default" ? "" : ` · effort ${settings.reasoningEffort}`;
-      await vscode.window.showInformationMessage(
-        `Connected to ${providerLabel(settings.provider)} · ${settings.model}${effort}. First token after ${elapsed} ms`,
-      );
-    } catch (error) {
-      if (!(error instanceof ConnectionFailure)) throw error;
-      const failure = error;
-      const fix = failure.fix ? FIX_ACTIONS[failure.fix] : undefined;
-      const selected = fix
-        ? await vscode.window.showErrorMessage(failure.message, fix[0])
-        : await vscode.window.showErrorMessage(failure.message);
-      if (fix && selected === fix[0]) await vscode.commands.executeCommand(fix[1]);
-    }
-  }
-
-  /** Runs a Connection setup command, applies what it changes, and tests the connection unless cancelled. */
-  const run = (command: typeof setUpConnection) => async (): Promise<void> => {
-    const result = await command(deps, prompter, readSettings());
-    if (!result) return;
-    const { secret } = result;
-    if (secret?.kind === "store") await context.secrets.store(secret.name, secret.value);
-    if (secret?.kind === "delete") await context.secrets.delete(secret.name);
-    for (const [field, value] of Object.entries(result.settings)) {
-      await config().update(field, value, vscode.ConfigurationTarget.Global);
-    }
-    await showTestResult();
-  };
-
-  async function clearApiKey(): Promise<void> {
-    const settings = readSettings();
-    const { secretName } = keySource(settings);
-    if (!(await context.secrets.get(secretName))) {
-      await vscode.window.showInformationMessage(`No saved API key for ${providerLabel(settings.provider)}.`);
-      return;
-    }
-    await context.secrets.delete(secretName);
-    await showTestResult();
-  }
-
-  return {
-    setUp: run(setUpConnection),
-    selectModel: run(selectModel),
-    setReasoningEffort: run(setReasoningEffort),
-    setApiKey: run(setApiKey),
-    clearApiKey,
-    testConnection: showTestResult,
-  };
 }
