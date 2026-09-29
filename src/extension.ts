@@ -3,21 +3,19 @@
 
 import type { MarkdownIt } from "markdown-it";
 import * as vscode from "vscode";
+import { type ConnectionDeps, ConnectionFailure, keySource, openConnection } from "./core/connection.ts";
 import {
-  type ConnectionDeps,
-  ConnectionFailure,
-  type ConnectionSettings,
-  type KeyChoice,
-  keySource,
-  openConnection,
-  setupSteps,
-} from "./core/connection.ts";
-import {
-  CUSTOM_PROVIDER_ID,
-  PROVIDER_PRESETS,
-  REASONING_EFFORTS,
-  type ReasoningEffort,
-} from "./core/providers.ts";
+  type Choice,
+  type InputOptions,
+  type Prompter,
+  type StepOptions,
+  type StepResult,
+  selectModel,
+  setApiKey,
+  setReasoningEffort,
+  setUpConnection,
+} from "./core/connection-setup.ts";
+import { PROVIDER_PRESETS, type ReasoningEffort } from "./core/providers.ts";
 import type { Settings } from "./core/request.ts";
 import { createTwain, type DisplayMode, type Failure, type Status, type Twain } from "./core/twain.ts";
 
@@ -202,23 +200,18 @@ function readSettings(): Settings {
   };
 }
 
-type StepResult<T> = { kind: "selected"; value: T } | { kind: "back" } | { kind: "cancel" };
+/** The Connection setup's prompts, as a QuickPick or an InputBox. */
+const prompter: Prompter = { pick, input };
 
-interface Choice<T> extends vscode.QuickPickItem {
-  value: T;
-}
-
-interface StepOptions {
-  title: string;
-  step?: number;
-  totalSteps?: number;
-  canBack?: boolean;
-  placeHolder?: string;
-}
-
-function pick<T>(items: Choice<T>[], options: StepOptions, current?: Choice<T>): Promise<StepResult<T>> {
+function pick<T>(choices: Choice<T>[], options: StepOptions, active?: Choice<T>): Promise<StepResult<T>> {
   return new Promise((resolve) => {
-    const quickPick = vscode.window.createQuickPick<Choice<T>>();
+    const quickPick = vscode.window.createQuickPick<vscode.QuickPickItem & { value: T }>();
+    const items = choices.map(({ label, detail, value, current, masked }) => ({
+      label,
+      description: current ? "$(check) Current" : masked ? "••••••••" : undefined,
+      detail,
+      value,
+    }));
     quickPick.title = options.title;
     quickPick.step = options.step;
     quickPick.totalSteps = options.totalSteps;
@@ -227,7 +220,7 @@ function pick<T>(items: Choice<T>[], options: StepOptions, current?: Choice<T>):
     quickPick.items = items;
     quickPick.matchOnDescription = true;
     quickPick.matchOnDetail = true;
-    if (current) quickPick.activeItems = [current];
+    if (active) quickPick.activeItems = [items[choices.indexOf(active)]];
     let done = false;
     const finish = (result: StepResult<T>) => {
       if (done) return;
@@ -246,9 +239,7 @@ function pick<T>(items: Choice<T>[], options: StepOptions, current?: Choice<T>):
   });
 }
 
-function input(
-  options: StepOptions & { value?: string; password?: boolean; required?: boolean },
-): Promise<StepResult<string>> {
+function input(options: InputOptions): Promise<StepResult<string>> {
   return new Promise((resolve) => {
     const box = vscode.window.createInputBox();
     box.title = options.title;
@@ -307,238 +298,18 @@ function connectionCommands(context: vscode.ExtensionContext, twain: Twain, deps
     }
   }
 
-  async function chooseProvider(settings: ConnectionSettings, options: StepOptions) {
-    const items: Choice<string>[] = [
-      ...PROVIDER_PRESETS.map((preset) => ({
-        label: preset.label,
-        description: preset.id === settings.provider ? "$(check) Current" : undefined,
-        value: preset.id,
-      })),
-      {
-        label: "Custom…",
-        description: settings.provider === CUSTOM_PROVIDER_ID ? "$(check) Current" : undefined,
-        value: CUSTOM_PROVIDER_ID,
-      },
-    ];
-    return pick(
-      items,
-      options,
-      items.find((item) => item.value === settings.provider),
-    );
-  }
-
-  async function chooseKey(
-    settings: ConnectionSettings,
-    options: StepOptions,
-  ): Promise<StepResult<KeyChoice>> {
-    const source = keySource(settings);
-    const saved = await context.secrets.get(source.secretName);
-    const preset = PROVIDER_PRESETS.find((item) => item.id === settings.provider);
-    const envName = source.envVar;
-    const hasEnv = Boolean(envName && deps.env[envName]);
-    const items: Choice<"saved" | "new" | "env" | "none">[] = [];
-    if (saved) items.push({ label: "Keep the saved key", description: "••••••••", value: "saved" });
-    items.push({ label: saved ? "Replace it with a new key…" : "Enter an API key…", value: "new" });
-    if (preset) {
-      if (hasEnv) items.push({ label: `Use $${envName}`, value: "env" });
-    } else {
-      items.push({ label: "Read it from an environment variable…", value: "env" });
-      items.push({ label: "No key", value: "none" });
-    }
-    const placeHolder =
-      preset && !hasEnv
-        ? `You can export $${envName} in the extension host environment instead.`
-        : options.placeHolder;
-    while (true) {
-      const result = await pick(items, { ...options, placeHolder });
-      if (result.kind !== "selected") return result;
-      if (result.value === "saved") return { kind: "selected", value: { kind: "saved" } };
-      if (result.value === "none") return { kind: "selected", value: { kind: "none" } };
-      if (result.value === "env" && preset) {
-        return { kind: "selected", value: { kind: "env", name: preset.apiKeyEnv } };
-      }
-      const entered = await input({
-        ...options,
-        canBack: true,
-        title: result.value === "new" ? "Enter API Key" : "Environment Variable Name",
-        placeHolder: result.value === "new" ? "API key" : "MY_API_KEY",
-        password: result.value === "new",
-        value: result.value === "env" ? settings.customApiKeyEnv : "",
-        required: true,
-      });
-      if (entered.kind === "cancel") return entered;
-      if (entered.kind === "back") continue;
-      return {
-        kind: "selected",
-        value:
-          result.value === "new"
-            ? { kind: "new", value: entered.value }
-            : { kind: "env", name: entered.value },
-      };
-    }
-  }
-
-  async function chooseModel(
-    settings: ConnectionSettings,
-    key: KeyChoice | undefined,
-    previousModel: string,
-    options: StepOptions,
-  ): Promise<StepResult<string>> {
-    let models: string[] = [];
-    let message: string | undefined;
-    try {
-      models = await openConnection(deps, settings, key).listModels();
-      if (previousModel && !models.includes(previousModel)) {
-        message = `Current model ${previousModel} is not in this provider's model list.`;
-      }
-    } catch (error) {
-      if (!(error instanceof ConnectionFailure)) throw error;
-      message = `Could not load models: ${error.message}`;
-    }
-    const items: Choice<string>[] = [
-      { label: "Enter a model ID…", detail: message, value: "" },
-      ...models.map((model) => ({
-        label: model,
-        description: model === (settings.model || previousModel) ? "$(check) Current" : undefined,
-        value: model,
-      })),
-    ];
-    while (true) {
-      const result = await pick(items, { ...options, placeHolder: message ?? options.placeHolder });
-      if (result.kind !== "selected") return result;
-      if (result.value) return result;
-      const entered = await input({
-        ...options,
-        canBack: true,
-        title: "Enter Model ID",
-        placeHolder: "Provider model ID",
-        value: settings.model || previousModel,
-        required: true,
-      });
-      if (entered.kind === "cancel") return entered;
-      if (entered.kind === "back") continue;
-      return entered;
-    }
-  }
-
-  async function chooseEffort(settings: ConnectionSettings, options: StepOptions) {
-    const values = [
-      settings.reasoningEffort,
-      ...REASONING_EFFORTS.filter((v) => v !== settings.reasoningEffort),
-    ];
-    const items: Choice<ReasoningEffort>[] = values.map((effort) => ({
-      label: effort,
-      description: effort === settings.reasoningEffort ? "$(check) Current" : undefined,
-      value: effort,
-    }));
-    return pick(items, { ...options, placeHolder: "Reasoning effort applies to every provider." }, items[0]);
-  }
-
-  async function saveKey(settings: ConnectionSettings, key: KeyChoice): Promise<void> {
-    const { secretName } = keySource(settings);
-    if (key.kind === "new") await context.secrets.store(secretName, key.value);
-    else if (key.kind !== "saved") await context.secrets.delete(secretName);
-  }
-
-  async function setUp(): Promise<void> {
-    const original = readSettings();
-    let draft: ConnectionSettings = { ...original };
-    let key: KeyChoice | undefined;
-    const snapshots: { settings: ConnectionSettings; key: KeyChoice | undefined }[] = [];
-    let index = 0;
-    while (true) {
-      const steps = setupSteps(draft.provider, draft.reasoningEffort);
-      if (index >= steps.length) break;
-      const step = steps[index];
-      const options: StepOptions = {
-        title: "Set Up LLM Connection",
-        step: index + 1,
-        totalSteps: steps.length,
-        canBack: index > 0,
-      };
-      let result: StepResult<string | KeyChoice>;
-      if (step === "provider") result = await chooseProvider(draft, options);
-      else if (step === "baseUrl") {
-        result = await input({
-          ...options,
-          placeHolder: "Base URL, for example http://localhost:11434/v1",
-          value: draft.customBaseUrl,
-          required: true,
-        });
-      } else if (step === "apiKey") result = await chooseKey(draft, options);
-      else if (step === "model") result = await chooseModel(draft, key, original.model, options);
-      else result = await chooseEffort(draft, options);
-
-      if (result.kind === "cancel") return;
-      if (result.kind === "back") {
-        const previous = snapshots.pop();
-        if (previous) {
-          draft = previous.settings;
-          key = previous.key;
-          index--;
-        }
-        continue;
-      }
-      snapshots.push({ settings: { ...draft }, key });
-      if (step === "provider") {
-        if (draft.provider !== result.value) {
-          draft.provider = result.value as string;
-          draft.model = "";
-          key = undefined;
-        }
-      } else if (step === "baseUrl") draft.customBaseUrl = result.value as string;
-      else if (step === "apiKey") {
-        key = result.value as KeyChoice;
-        if (draft.provider === CUSTOM_PROVIDER_ID) {
-          draft.customApiKeyEnv = key.kind === "env" ? key.name : "";
-        }
-      } else if (step === "model") draft.model = result.value as string;
-      else draft.reasoningEffort = result.value as ReasoningEffort;
-      index++;
-    }
-    if (key) await saveKey(draft, key);
-    for (const field of [
-      "provider",
-      "customBaseUrl",
-      "customApiKeyEnv",
-      "model",
-      "reasoningEffort",
-    ] as const) {
-      if (draft[field] !== original[field]) {
-        await config().update(field, draft[field], vscode.ConfigurationTarget.Global);
-      }
+  /** Runs a Connection setup command, applies what it changes, and tests the connection unless cancelled. */
+  const run = (command: typeof setUpConnection) => async (): Promise<void> => {
+    const result = await command(deps, prompter, readSettings());
+    if (!result) return;
+    const { secret } = result;
+    if (secret?.kind === "store") await context.secrets.store(secret.name, secret.value);
+    if (secret?.kind === "delete") await context.secrets.delete(secret.name);
+    for (const [field, value] of Object.entries(result.settings)) {
+      await config().update(field, value, vscode.ConfigurationTarget.Global);
     }
     await showTestResult();
-  }
-
-  async function selectModel(): Promise<void> {
-    const settings = readSettings();
-    const result = await chooseModel(settings, undefined, settings.model, {
-      title: "Select Model",
-    });
-    if (result.kind !== "selected") return;
-    await config().update("model", result.value, vscode.ConfigurationTarget.Global);
-    await showTestResult();
-  }
-
-  async function setReasoningEffort(): Promise<void> {
-    const result = await chooseEffort(readSettings(), { title: "Set Reasoning Effort" });
-    if (result.kind !== "selected") return;
-    await config().update("reasoningEffort", result.value, vscode.ConfigurationTarget.Global);
-    await showTestResult();
-  }
-
-  async function setApiKey(): Promise<void> {
-    const settings = readSettings();
-    const result = await chooseKey(settings, { title: "Set API Key" });
-    if (result.kind !== "selected") return;
-    await saveKey(settings, result.value);
-    if (settings.provider === CUSTOM_PROVIDER_ID) {
-      const env = result.value.kind === "env" ? result.value.name : "";
-      await config().update("customApiKeyEnv", env, vscode.ConfigurationTarget.Global);
-    }
-    await showTestResult();
-  }
+  };
 
   async function clearApiKey(): Promise<void> {
     const settings = readSettings();
@@ -551,5 +322,12 @@ function connectionCommands(context: vscode.ExtensionContext, twain: Twain, deps
     await showTestResult();
   }
 
-  return { setUp, selectModel, setReasoningEffort, setApiKey, clearApiKey, testConnection: showTestResult };
+  return {
+    setUp: run(setUpConnection),
+    selectModel: run(selectModel),
+    setReasoningEffort: run(setReasoningEffort),
+    setApiKey: run(setApiKey),
+    clearApiKey,
+    testConnection: showTestResult,
+  };
 }

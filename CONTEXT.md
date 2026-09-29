@@ -40,6 +40,10 @@ _Avoid_: other provider, manual provider
 What translation talks to: one **Provider preset** or the **Custom provider**, plus an API key, a model, and a **Reasoning effort**. There is exactly one, set in User settings; switching provider replaces it rather than switching between saved ones.
 _Avoid_: profile, account, saved connection
 
+**Connection setup**:
+The guided steps that replace the **LLM connection**: a **Provider preset** or the **Custom provider** with its base URL, an API key, a model, and the **Reasoning effort** when it isn't `default`. The model, API key, and Reasoning effort steps can also run on their own; every setup that changes something ends with a connection test.
+_Avoid_: wizard, onboarding
+
 **Target language**:
 The language translation writes into: either a specific language from the offered list, or `auto`, which follows VS Code's display language.
 _Avoid_: output language, destination language, to-language

@@ -1,11 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  type Connection,
-  ConnectionFailure,
-  type ConnectionSettings,
-  type KeyChoice,
-  openConnection,
-} from "./connection.ts";
+import { type Connection, ConnectionFailure, type ConnectionSettings, openConnection } from "./connection.ts";
+import type { KeyChoice } from "./connection-setup.ts";
 
 const SETTINGS: ConnectionSettings = {
   provider: "openrouter",
