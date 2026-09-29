@@ -11,7 +11,7 @@ Uploads are manual because Azure DevOps personal access tokens, which `vsce publ
 
    ```sh
    git fetch origin
-   git tag v<version> origin/main
+   git tag v<version> <merge-commit>
    git push origin v<version>
    ```
 

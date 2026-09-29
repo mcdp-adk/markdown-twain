@@ -34,6 +34,14 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match manifest version $version."
             exit 1
           fi
+      - name: Check no Release exists for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "::error::A Release for $GITHUB_REF_NAME already exists."
+            exit 1
+          fi
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -41,11 +49,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm package
-      # gh refuses to create a Release when a published one already exists for the tag.
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "markdown-twain-${GITHUB_REF_NAME#v}.vsix" \
+          gh release create "$GITHUB_REF_NAME" ./*.vsix \
             --title "$GITHUB_REF_NAME" \
             --notes "See [CHANGELOG.md]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md) for what changed."
