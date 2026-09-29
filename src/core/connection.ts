@@ -2,6 +2,7 @@
 // settings snapshot; the adapter injects `fetch`, secrets, the environment, and
 // the clock.
 
+import type { KeyChoice } from "./connection-setup.ts";
 import { CUSTOM_PROVIDER_ID, type EffortStyle, PROVIDER_PRESETS, type ReasoningEffort } from "./providers.ts";
 import type { Settings } from "./request.ts";
 
@@ -23,13 +24,6 @@ export interface ConnectionDeps {
   env: Readonly<Record<string, string | undefined>>;
   clock: Clock;
 }
-
-/** A key picked during setup, in place of the saved key or the environment. */
-export type KeyChoice =
-  | { kind: "saved" }
-  | { kind: "new"; value: string }
-  | { kind: "env"; name: string }
-  | { kind: "none" };
 
 export type ConnectionFix = "setUpConnection" | "setApiKey" | "selectModel" | "setReasoningEffort";
 
@@ -436,16 +430,4 @@ function wait(clock: Clock, ms: number, signal: AbortSignal): Promise<void> {
     }, ms);
     signal.addEventListener("abort", onAbort, { once: true });
   });
-}
-
-type SetupStep = "provider" | "baseUrl" | "apiKey" | "model" | "reasoningEffort";
-
-export function setupSteps(provider: string, effort: ReasoningEffort): SetupStep[] {
-  return [
-    "provider",
-    ...(provider === CUSTOM_PROVIDER_ID ? ["baseUrl" as const] : []),
-    "apiKey",
-    "model",
-    ...(effort === "default" ? [] : ["reasoningEffort" as const]),
-  ];
 }
