@@ -14,8 +14,9 @@ The five default triage labels are used as-is: `needs-triage`, `needs-info`, `re
 
 Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
-## Conventions
+## Invariants
 
-- Use worktrees and PRs by default.
-- Check off issue acceptance criteria as you go.
-- Lead PR descriptions with relevant references.
+- No two sessions share a working tree; worktrees live in `.claude/worktrees/`.
+- Changes reach `main` through a PR unless the owner asks for a direct commit.
+- Every ticked acceptance criterion has evidence, and an issue closes only with every criterion ticked.
+- A PR for an issue starts with `Closes #N` when it finishes the issue, or `Refs #N` when it doesn't.
