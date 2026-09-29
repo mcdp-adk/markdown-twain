@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ConnectionSettings } from "./connection.ts";
-import { scenario } from "./scenario-harness.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  type Connection,
+  ConnectionFailure,
+  type ConnectionSettings,
+  type KeyChoice,
+  openConnection,
+} from "./connection.ts";
 
-const settings: ConnectionSettings = {
+const SETTINGS: ConnectionSettings = {
   provider: "openrouter",
   customBaseUrl: "",
   customApiKeyEnv: "",
@@ -10,239 +15,399 @@ const settings: ConnectionSettings = {
   reasoningEffort: "low",
 };
 
+interface Sent {
+  url: string;
+  method: string | undefined;
+  headers: Record<string, string>;
+  body: Record<string, unknown> | undefined;
+}
+
+interface ConnectOptions {
+  settings?: Partial<ConnectionSettings>;
+  secrets?: Record<string, string>;
+  env?: Record<string, string | undefined>;
+  keyChoice?: KeyChoice;
+  now?: () => number;
+}
+
+/** A connection whose provider answers with `respond`, and every request it sent. */
+function connect(respond: (init: RequestInit) => Response | Promise<Response>, options: ConnectOptions = {}) {
+  const sent: Sent[] = [];
+  const secretReads: string[] = [];
+  const connection = openConnection(
+    {
+      fetch: (async (url: string, init: RequestInit) => {
+        sent.push({
+          url,
+          method: init.method,
+          headers: init.headers as Record<string, string>,
+          body: init.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        return respond(init);
+      }) as typeof fetch,
+      secret: async (name) => {
+        secretReads.push(name);
+        return options.secrets?.[name];
+      },
+      env: options.env ?? { OPENROUTER_API_KEY: "sk-env" },
+      clock: {
+        setTimeout: (callback, ms) => setTimeout(callback, ms),
+        clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+        now: options.now ?? (() => Date.now()),
+      },
+    },
+    { ...SETTINGS, ...options.settings },
+    options.keyChoice,
+  );
+  return { connection, sent, secretReads };
+}
+
+const answer = (content: string) => Response.json({ choices: [{ message: { role: "assistant", content } }] });
+const sse = (text = "data: {}\n\n") =>
+  new Response(text, { headers: { "Content-Type": "text/event-stream" } });
+/** A provider that never answers until the request is aborted. */
+const hang = (init: RequestInit) =>
+  new Promise<Response>((_, reject) => {
+    init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+  });
+const complete = (connection: Connection) =>
+  connection.complete("System.", "User.", new AbortController().signal);
+
+/** What a call's ConnectionFailure shows the user. */
+async function failure(call: Promise<unknown>): Promise<{ message: string; fix?: string }> {
+  try {
+    await call;
+  } catch (error) {
+    if (!(error instanceof ConnectionFailure)) throw error;
+    return error.fix ? { message: error.message, fix: error.fix } : { message: error.message };
+  }
+  throw new Error("The call didn't fail.");
+}
+
+beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-describe("scenario 15: LLM connection through Twain", () => {
-  it("offers actionable missing-setting errors", async () => {
-    const { twain } = scenario();
-    const custom = { ...settings, provider: "custom" };
-    let error: unknown;
-    try {
-      await twain.testConnection(custom);
-    } catch (caught) {
-      error = caught;
-    }
-    expect(twain.classifyConnectionError(error, custom)).toEqual({
-      message: "Set a Custom provider base URL.",
-      fix: "setUpConnection",
+describe("readiness", () => {
+  it.each([
+    ["an unknown provider", { settings: { provider: "nope" } }, "Select a provider.", "setUpConnection"],
+    [
+      "a Custom provider without a base URL",
+      { settings: { provider: "custom", customBaseUrl: " " } },
+      "Set a Custom provider base URL.",
+      "setUpConnection",
+    ],
+    ["an empty model", { settings: { model: " " } }, "Select a model.", "selectModel"],
+    [
+      "a Provider preset without a saved or environment key",
+      { settings: { provider: "openai" }, env: {} },
+      "No API key for OpenAI.",
+      "setApiKey",
+    ],
+  ] as const)(
+    "rejects %s the same way before translating and during setup",
+    async (_, options, message, fix) => {
+      const { connection, sent } = connect(() => sse(), options);
+      expect(await failure(connection.check())).toEqual({ message, fix });
+      expect(await failure(connection.ping())).toEqual({ message, fix });
+      expect(sent).toHaveLength(0);
+    },
+  );
+
+  it("lets a Custom provider go without a key, and sends no Authorization", async () => {
+    const { connection, sent } = connect(() => answer("Hi."), {
+      settings: { provider: "custom", customBaseUrl: "http://localhost:1234/api/chat/completions/" },
+      env: {},
     });
-    const noModel = { ...settings, model: "" };
-    try {
-      await twain.testConnection(noModel);
-    } catch (caught) {
-      error = caught;
-    }
-    expect(twain.classifyConnectionError(error, noModel)).toEqual({
-      message: "Select a model.",
-      fix: "selectModel",
-    });
+    await connection.check();
+    await complete(connection);
+    expect(sent[0].url).toBe("http://localhost:1234/api/chat/completions");
+    expect(sent[0].headers).toEqual({ "Content-Type": "application/json" });
+    expect(sent[0].body?.reasoning_effort).toBe("low");
   });
 
-  it("lists every model ID from the provider without filtering", async () => {
-    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
-      expect(url).toBe("https://openrouter.ai/api/v1/models");
-      expect(init.method).toBe("GET");
-      expect((init.headers as Record<string, string>).Authorization).toBe("Bearer environment-secret");
-      return Response.json({ data: [{ id: "a" }, { id: "z/unusual" }, { id: "a" }] });
-    });
-    const { twain } = scenario({
-      connectionFetch: fetchImpl,
-      env: { OPENROUTER_API_KEY: "environment-secret" },
-    });
-    expect(await twain.listModels(settings)).toEqual(["a", "z/unusual", "a"]);
+  it.each([
+    ["SecretStorage before the environment", { secrets: { "apiKey.openrouter": "sk-secret" } }, "sk-secret"],
+    [
+      "a Custom key from customApiKeyEnv",
+      {
+        settings: { provider: "custom", customBaseUrl: "http://localhost:1234", customApiKeyEnv: "MY_KEY" },
+        env: { MY_KEY: "sk-mine" },
+      },
+      "sk-mine",
+    ],
+  ] as const)("reads %s", async (_, options, key) => {
+    const { connection, sent } = connect(() => answer("Hi."), options);
+    await complete(connection);
+    expect(sent[0].headers.Authorization).toBe(`Bearer ${key}`);
   });
 
-  it("aborts after a partial first stream chunk while the stream remains pending", async () => {
-    let aborted = false;
-    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
-      expect(JSON.parse(String(init.body))).toEqual({
-        model: "openai/example",
-        messages: [{ role: "user", content: "ping" }],
-        stream: true,
-        reasoning: { effort: "low" },
-      });
-      init.signal?.addEventListener("abort", () => {
-        aborted = true;
-      });
-      return new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("data: {"));
-          },
-        }),
-        { headers: { "Content-Type": "text/event-stream" } },
-      );
-    });
-    const now = vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(42);
-    const { twain } = scenario({ connectionFetch: fetchImpl, now });
-    expect(await twain.testConnection(settings)).toBe(32);
-    expect(aborted).toBe(true);
+  it("reads the key once for a check and the requests that follow it", async () => {
+    const { connection, secretReads } = connect(() => answer("Hi."));
+    await connection.check();
+    await complete(connection);
+    await complete(connection);
+    expect(secretReads).toEqual(["apiKey.openrouter"]);
   });
 
-  it("does not report a connection for a non-SSE response or an SSE comment", async () => {
-    const html = scenario({
-      connectionFetch: async () =>
-        new Response("<html>ok</html>", { headers: { "Content-Type": "text/html" } }),
-    });
-    await expect(html.twain.testConnection(settings)).rejects.toThrow("Expected an SSE response.");
-
-    const comment = scenario({
-      connectionFetch: async () =>
-        new Response(": keepalive\n\n", { headers: { "Content-Type": "text/event-stream" } }),
-    });
-    await expect(comment.twain.testConnection(settings)).rejects.toThrow("No SSE data in response.");
-  });
-
-  it("suggests changing effort only when the failed request carried effort", async () => {
-    const { twain } = scenario({
-      connectionFetch: async () => Response.json({ error: { message: "Unsupported" } }, { status: 400 }),
-    });
-    let modelsError: unknown;
-    let pingError: unknown;
-    let defaultError: unknown;
-    try {
-      await twain.listModels(settings);
-    } catch (error) {
-      modelsError = error;
-    }
-    try {
-      await twain.testConnection(settings);
-    } catch (error) {
-      pingError = error;
-    }
-    const noEffort = { ...settings, reasoningEffort: "default" as const };
-    try {
-      await twain.testConnection(noEffort);
-    } catch (error) {
-      defaultError = error;
-    }
-    expect(twain.classifyConnectionError(modelsError, settings)).toEqual({ message: "Unsupported" });
-    expect(twain.classifyConnectionError(pingError, settings)).toEqual({
-      message: "Unsupported. Reasoning effort is set to `low`; try `default`.",
-      fix: "setReasoningEffort",
-    });
-    expect(twain.classifyConnectionError(defaultError, noEffort)).toEqual({ message: "Unsupported" });
-  });
-
-  it("uses explicit Custom key choices and omits effort at default", async () => {
+  it("uses explicit key choices during setup and omits effort at default", async () => {
     const custom = {
-      ...settings,
       provider: "custom",
       customBaseUrl: "http://localhost:11434/v1/chat/completions/",
       reasoningEffort: "default" as const,
     };
-    const seen: Array<{ url: string; init: RequestInit }> = [];
-    const { twain } = scenario({
+    const listing = connect(() => Response.json({ data: [{ id: "local" }] }), {
+      settings: custom,
       env: { LOCAL_KEY: "environment-secret" },
-      connectionFetch: async (url, init) => {
-        seen.push({ url, init });
-        if (url.endsWith("/models")) return Response.json({ data: [{ id: "local" }] });
-        return new Response("data: {", { headers: { "Content-Type": "text/event-stream" } });
-      },
+      keyChoice: { kind: "env", name: "LOCAL_KEY" },
     });
-    await twain.listModels(custom, { kind: "env", name: "LOCAL_KEY" });
-    await twain.testConnection(custom, { kind: "none" });
-    expect(seen[0].url).toBe("http://localhost:11434/v1/models");
-    expect((seen[0].init.headers as Record<string, string>).Authorization).toBe("Bearer environment-secret");
-    expect(seen[1].url).toBe("http://localhost:11434/v1/chat/completions");
-    expect((seen[1].init.headers as Record<string, string>).Authorization).toBeUndefined();
-    expect(JSON.parse(String(seen[1].init.body))).toEqual({
+    await listing.connection.listModels();
+    expect(listing.sent[0].url).toBe("http://localhost:11434/v1/models");
+    expect(listing.sent[0].headers.Authorization).toBe("Bearer environment-secret");
+
+    const pinging = connect(() => sse(), { settings: custom, keyChoice: { kind: "none" } });
+    await pinging.connection.ping();
+    expect(pinging.sent[0].url).toBe("http://localhost:11434/v1/chat/completions");
+    expect(pinging.sent[0].headers.Authorization).toBeUndefined();
+    expect(pinging.sent[0].body).toEqual({
       model: "openai/example",
       messages: [{ role: "user", content: "ping" }],
       stream: true,
     });
   });
+});
 
-  it("keeps chosen secrets out of provider and network error messages", async () => {
-    const { twain } = scenario({
-      connectionFetch: async () => Response.json({ error: { message: "bad secret-value" } }, { status: 401 }),
+describe("identity", () => {
+  const identity = (settings: Partial<ConnectionSettings>) =>
+    connect(() => answer(""), { settings }).connection.identity;
+
+  it("covers the URL, model and Reasoning effort field, but not the key source", () => {
+    const custom = { provider: "custom", customBaseUrl: "http://localhost:1234/v1" };
+    expect(identity({ ...custom, customApiKeyEnv: "OTHER_KEY" })).toBe(identity(custom));
+    expect(identity({ ...custom, customBaseUrl: "http://localhost:1234/v1/" })).toBe(identity(custom));
+    expect(identity({ ...custom, customBaseUrl: "http://localhost:5678/v1" })).not.toBe(identity(custom));
+    expect(identity({ model: "other" })).not.toBe(identity({}));
+    expect(identity({ reasoningEffort: "high" })).not.toBe(identity({}));
+    expect(identity({ reasoningEffort: "default" })).not.toBe(identity({}));
+  });
+});
+
+describe("completions", () => {
+  it.each([
+    ["openrouter", "low", { reasoning: { effort: "low" } }],
+    ["openai", "high", { reasoning_effort: "high" }],
+    ["deepseek", "none", { reasoning_effort: "none" }],
+    ["openrouter", "default", {}],
+    ["openai", "default", {}],
+  ] as const)("carry the %s effort field for %s", async (provider, reasoningEffort, field) => {
+    const { connection, sent } = connect(() => answer("Hi."), {
+      settings: { provider, reasoningEffort },
+      env: { OPENROUTER_API_KEY: "k", OPENAI_API_KEY: "k", DEEPSEEK_API_KEY: "k" },
     });
-    let error: unknown;
-    try {
-      await twain.listModels(settings, { kind: "new", value: "secret-value" });
-    } catch (caught) {
-      error = caught;
-    }
-    expect(twain.classifyConnectionError(error, settings)).toEqual({
+    await complete(connection);
+    expect(sent[0].body).toEqual({
+      model: "openai/example",
+      messages: [
+        { role: "system", content: "System." },
+        { role: "user", content: "User." },
+      ],
+      stream: false,
+      ...field,
+    });
+  });
+
+  it("honor Retry-After on a 429 before retrying", async () => {
+    let attempts = 0;
+    const { connection, sent } = connect(() =>
+      attempts++ === 0
+        ? Response.json(
+            { error: { message: "Rate limited" } },
+            { status: 429, headers: { "Retry-After": "2" } },
+          )
+        : answer("Hi."),
+    );
+    const result = complete(connection);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(sent).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sent).toHaveLength(2);
+    expect(await result).toBe("Hi.");
+  });
+
+  it("fail without retrying when Retry-After exceeds 30 seconds", async () => {
+    const { connection, sent } = connect(() =>
+      Response.json(
+        { error: { message: "Rate limited" } },
+        { status: 429, headers: { "Retry-After": "31" } },
+      ),
+    );
+    expect(await failure(complete(connection))).toEqual({ message: "Rate limited" });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("time out a hung request after 120 seconds and retry it twice", async () => {
+    const { connection, sent } = connect(hang);
+    const result = failure(complete(connection));
+    await vi.runAllTimersAsync();
+    expect(await result).toEqual({
+      message: "Request timed out after 120 seconds. Check VS Code's `http.proxy` setting.",
+    });
+    expect(sent).toHaveLength(3);
+  });
+});
+
+describe("setup requests", () => {
+  it("list every model ID from the provider without filtering, with no model set", async () => {
+    const { connection, sent } = connect(
+      () => Response.json({ data: [{ id: "a" }, { id: "z/unusual" }, { id: "a" }] }),
+      { settings: { model: "" }, env: { OPENROUTER_API_KEY: "environment-secret" } },
+    );
+    expect(await connection.listModels()).toEqual(["a", "z/unusual", "a"]);
+    expect(sent[0]).toMatchObject({
+      url: "https://openrouter.ai/api/v1/models",
+      method: "GET",
+      headers: { Authorization: "Bearer environment-secret" },
+    });
+  });
+
+  it("ping until a partial first stream chunk, then abort while the stream remains pending", async () => {
+    let aborted = false;
+    const now = vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(42);
+    const { connection, sent } = connect(
+      (init) => {
+        init.signal?.addEventListener("abort", () => {
+          aborted = true;
+        });
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("data: {"));
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      },
+      { now },
+    );
+    expect(await connection.ping()).toBe(32);
+    expect(aborted).toBe(true);
+    expect(sent[0].body).toEqual({
+      model: "openai/example",
+      messages: [{ role: "user", content: "ping" }],
+      stream: true,
+      reasoning: { effort: "low" },
+    });
+  });
+
+  it("don't report a connection for a non-SSE response or an SSE comment", async () => {
+    const html = connect(() => new Response("<html>ok</html>", { headers: { "Content-Type": "text/html" } }));
+    expect(await failure(html.connection.ping())).toEqual({ message: "Expected an SSE response." });
+    const comment = connect(() => sse(": keepalive\n\n"));
+    expect(await failure(comment.connection.ping())).toEqual({ message: "No SSE data in response." });
+  });
+
+  it.each([
+    ["the model list", (connection: Connection) => connection.listModels()],
+    ["Test Connection", (connection: Connection) => connection.ping()],
+  ])("time %s out after 120 seconds without retrying", async (_, call) => {
+    const { connection, sent } = connect(hang);
+    const result = failure(call(connection));
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(await result).toEqual({
+      message: "Request timed out after 120 seconds. Check VS Code's `http.proxy` setting.",
+    });
+    await vi.runAllTimersAsync();
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("failures", () => {
+  it.each([
+    [401, "No auth credentials found", {}, { message: "No auth credentials found", fix: "setApiKey" }],
+    [
+      404,
+      "Not found",
+      { provider: "custom", customBaseUrl: "http://localhost:1234" },
+      { message: "Not found. Try adding `/v1` to the Custom provider base URL.", fix: "selectModel" },
+    ],
+    [
+      400,
+      "missing-model is not a valid model ID",
+      {},
+      { message: "missing-model is not a valid model ID", fix: "selectModel" },
+    ],
+    [407, "Proxy auth", {}, { message: "Proxy auth. Check VS Code's `http.proxy` setting." }],
+  ] as const)("classify a %i with its fix", async (status, message, settings, expected) => {
+    const { connection } = connect(() => Response.json({ error: { message } }, { status }), { settings });
+    expect(await failure(complete(connection))).toEqual(expected);
+  });
+
+  it("suggest changing effort only when the failed request carried effort", async () => {
+    const unsupported = () => Response.json({ error: { message: "Unsupported" } }, { status: 400 });
+    const withEffort = connect(unsupported).connection;
+    const noEffort = connect(unsupported, { settings: { reasoningEffort: "default" } }).connection;
+    const effortHint = {
+      message: "Unsupported. Reasoning effort is set to `low`; try `default`.",
+      fix: "setReasoningEffort",
+    };
+    expect(await failure(withEffort.listModels())).toEqual({ message: "Unsupported" });
+    expect(await failure(withEffort.ping())).toEqual(effortHint);
+    expect(await failure(complete(withEffort))).toEqual(effortHint);
+    expect(await failure(noEffort.ping())).toEqual({ message: "Unsupported" });
+  });
+
+  it("keep the chosen key out of provider and network error messages", async () => {
+    const keyChoice = { kind: "new", value: "secret-value" } as const;
+    const provider = connect(
+      () => Response.json({ error: { message: "bad secret-value" } }, { status: 401 }),
+      {
+        keyChoice,
+      },
+    );
+    expect(await failure(provider.connection.listModels())).toEqual({
       message: "bad [redacted]",
       fix: "setApiKey",
     });
-    const network = scenario({
-      connectionFetch: async () => {
+
+    const network = connect(
+      () => {
         throw Object.assign(new Error("fetch failed with secret-value"), {
           cause: { code: "ECONNREFUSED", message: "secret-value refused" },
         });
       },
-    });
-    try {
-      await network.twain.listModels(settings, { kind: "new", value: "secret-value" });
-    } catch (caught) {
-      error = caught;
-    }
-    expect((error as Error).message).toBe("ECONNREFUSED [redacted] refused");
-    const classified = network.twain.classifyConnectionError(error, settings);
-    expect(classified.message).toContain("ECONNREFUSED [redacted] refused");
-    expect(classified.message).not.toContain("secret-value");
-  });
-
-  it("shows sanitized cause details when a Document brief loses its connection", async () => {
-    const key = "mock-secret-key";
-    const s = scenario({
-      secrets: { "apiKey.openrouter": key },
-      briefReply: () => {
-        throw Object.assign(new Error(`fetch failed with ${key}`), {
-          cause: { code: "ECONNRESET", message: `connection reset for ${key}` },
-        });
-      },
-    });
-    await s.setDisplayMode("bilingual");
-    s.render("file:///network.md", "Hello.\n");
-    await s.settle();
-
-    expect(s.runEnds).toEqual([
-      {
-        kind: "halted",
-        error: {
-          message: "ECONNRESET connection reset for [redacted]. Check VS Code's `http.proxy` setting.",
-        },
-      },
-    ]);
-    expect(s.logLines.join("\n")).toContain("ECONNRESET connection reset for [redacted]");
-    expect(s.logLines.join("\n")).not.toContain(key);
-  });
-
-  it("redacts errors while reading a failed provider response", async () => {
-    const key = "mock-secret-key";
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.error(
-            Object.assign(new Error(`read failed for ${key}`), {
-              cause: { code: "ECONNRESET", message: `${key} connection closed` },
-            }),
-          );
-        },
-      }),
-      { status: 400 },
+      { keyChoice },
     );
-    const { twain } = scenario({ connectionFetch: async () => response });
-    let error: unknown;
-    try {
-      await twain.testConnection(settings, { kind: "new", value: key });
-    } catch (caught) {
-      error = caught;
-    }
+    expect(await failure(network.connection.listModels())).toEqual({
+      message: "ECONNREFUSED [redacted] refused. Check VS Code's `http.proxy` setting.",
+    });
+  });
 
-    expect((error as Error).message).toBe("ECONNRESET [redacted] connection closed");
-    expect(twain.classifyConnectionError(error, settings)).toEqual({
+  it("redact errors while reading a failed provider response", async () => {
+    const key = "mock-secret-key";
+    const { connection } = connect(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(
+                Object.assign(new Error(`read failed for ${key}`), {
+                  cause: { code: "ECONNRESET", message: `${key} connection closed` },
+                }),
+              );
+            },
+          }),
+          { status: 400 },
+        ),
+      { keyChoice: { kind: "new", value: key } },
+    );
+    expect(await failure(connection.ping())).toEqual({
       message: "ECONNRESET [redacted] connection closed. Check VS Code's `http.proxy` setting.",
     });
   });
 
-  it("redacts errors while reading the SSE stream", async () => {
+  it("redact errors while reading the SSE stream", async () => {
     const key = "mock-secret-key";
-    const { twain } = scenario({
-      connectionFetch: async () =>
+    const { connection } = connect(
+      () =>
         new Response(
           new ReadableStream({
             start(controller) {
@@ -251,16 +416,9 @@ describe("scenario 15: LLM connection through Twain", () => {
           }),
           { headers: { "Content-Type": "text/event-stream" } },
         ),
-    });
-    let error: unknown;
-    try {
-      await twain.testConnection(settings, { kind: "new", value: key });
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect((error as Error).message).toBe("stream dropped for [redacted]");
-    expect(twain.classifyConnectionError(error, settings)).toEqual({
+      { keyChoice: { kind: "new", value: key } },
+    );
+    expect(await failure(connection.ping())).toEqual({
       message: "stream dropped for [redacted]. Check VS Code's `http.proxy` setting.",
     });
   });
@@ -269,16 +427,8 @@ describe("scenario 15: LLM connection through Twain", () => {
     [{ error: { message: "nested" }, message: "outer" }, "nested"],
     [{ error: "string error", message: "outer" }, "string error"],
     [{ error: { message: 123 }, message: "outer" }, "outer"],
-  ])("reads provider error text by the specified precedence", async (body, expected) => {
-    const { twain } = scenario({
-      connectionFetch: async () => Response.json(body, { status: 403 }),
-    });
-    let error: unknown;
-    try {
-      await twain.listModels(settings);
-    } catch (caught) {
-      error = caught;
-    }
-    expect(twain.classifyConnectionError(error, settings)).toEqual({ message: expected });
+  ])("read provider error text by the specified precedence", async (body, expected) => {
+    const { connection } = connect(() => Response.json(body, { status: 403 }));
+    expect(await failure(connection.listModels())).toEqual({ message: expected });
   });
 });

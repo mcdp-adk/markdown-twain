@@ -2,30 +2,19 @@
 // shown. It never imports `vscode`; the adapter injects everything it needs.
 
 import type { MarkdownIt, Renderer, Token } from "markdown-it";
+import { briefSystemPrompt, briefUserMessage } from "./brief-prompt.ts";
 import {
-  type ConnectionSettings,
-  classifyConnectionError,
-  type KeyChoice,
-  listModels,
-  setupSteps,
-  testConnection,
+  type Connection,
+  type ConnectionDeps,
+  ConnectionFailure,
+  type ConnectionFix,
+  openConnection,
 } from "./connection.ts";
 import { NO_TRANSLATION_SENTINEL } from "./prompt.ts";
 import {
-  CUSTOM_PROVIDER_ID,
-  PROVIDER_PRESETS,
-  providerConnection,
-  type ReasoningEffort,
-} from "./providers.ts";
-import {
   batchInput,
-  buildBriefRequest,
-  buildRequest,
-  RequestError,
   requestInput,
-  resolveApiKey,
   type Settings,
-  send,
   splitBatchResponse,
   type TranslationContext,
   translationContext,
@@ -33,11 +22,8 @@ import {
 import { resolveTargetLanguage } from "./target-language.ts";
 
 export type DisplayMode = "originalOnly" | "bilingual" | "translationOnly";
-export type PreflightFailure =
-  | { kind: "notSetUp"; message: string; fix: "setUpConnection" }
-  | { kind: "noKey"; message: string; fix: "setApiKey" }
-  | { kind: "unsupportedDisplayLanguage"; message: string; fix: "openTargetLanguageSetting" };
-type RunError = ReturnType<typeof classifyConnectionError> | PreflightFailure;
+/** Why translation can't start or stopped, and the action that fixes it. */
+export type Failure = { message: string; fix?: ConnectionFix | "openTargetLanguageSetting" };
 
 class EmptyBriefError extends Error {}
 
@@ -52,26 +38,15 @@ const MAX_BATCH_CHARS = 1000;
 /** Characters of a document's current text its Document brief is written from. */
 const BRIEF_INPUT_CHARS = 12_000;
 
-export interface Clock {
-  setTimeout(callback: () => void, ms: number): unknown;
-  clearTimeout(handle: unknown): void;
-  now(): number;
-}
-
 export interface Log {
   info(message: string): void;
   error(message: string): void;
 }
 
-export interface TwainDeps {
-  fetch: typeof globalThis.fetch;
+export interface TwainDeps extends ConnectionDeps {
   /** Runs `markdown.preview.refresh`. */
   refresh: () => void;
-  clock: Clock;
   settings: () => Settings;
-  /** Reads SecretStorage, for example `apiKey.openai`. */
-  secret: (name: string) => Promise<string | undefined>;
-  env: Readonly<Record<string, string | undefined>>;
   /** Document URI → its current text. */
   readDocument: (uri: string) => string | undefined;
   log: Log;
@@ -86,28 +61,21 @@ export type Status =
   | { kind: "idle" }
   | { kind: "preparing" }
   | { kind: "translating"; landed: number; total: number }
-  | { kind: "halted"; error: RunError }
+  | { kind: "halted"; error: Failure }
   | { kind: "someFailed"; count: number; total: number };
 
 /** Fired at most once per run, when it ends. */
 export type RunEnd =
-  | { kind: "halted"; error: RunError }
+  | { kind: "halted"; error: Failure }
   | { kind: "finishedWithFailures"; count: number; total: number };
 
 export interface Twain {
   /** The plugin for the built-in preview's markdown-it, through `extendMarkdownIt`. */
   markdownItPlugin(md: MarkdownIt): MarkdownIt;
-  setDisplayMode(mode: DisplayMode): Promise<PreflightFailure | undefined>;
+  setDisplayMode(mode: DisplayMode): Promise<Failure | undefined>;
   /** Restarts translation after a markdownTwain setting changes. */
   settingsChanged(): void;
   readonly displayMode: DisplayMode;
-  setupSteps(provider: string, effort: ReasoningEffort): ReturnType<typeof setupSteps>;
-  listModels(settings: ConnectionSettings, keyChoice?: KeyChoice): Promise<string[]>;
-  testConnection(settings: ConnectionSettings, keyChoice?: KeyChoice): Promise<number>;
-  classifyConnectionError(
-    error: unknown,
-    settings: ConnectionSettings,
-  ): ReturnType<typeof classifyConnectionError>;
   /** Clears the failed set, and refreshes if the mode is translated. */
   retry(): void;
   readonly status: Status;
@@ -171,7 +139,7 @@ export function createTwain(deps: TwainDeps): Twain {
   let run: Run | undefined;
   /** Blocks failed since the last retry, out of the Blocks of the runs that ended since then. */
   let failuresSinceRetry = { count: 0, total: 0 };
-  let halted: RunError | undefined;
+  let halted: Failure | undefined;
   let modePickVersion = 0;
   let status: Status = { kind: "idle" };
   const statusListeners: ((status: Status) => void)[] = [];
@@ -203,23 +171,13 @@ export function createTwain(deps: TwainDeps): Twain {
     if (run) run.blocksFailed = 0;
   }
 
-  /** Resolve the key once for both validation and the request that follows it. */
-  async function preflight(settings: Settings): Promise<{ apiKey?: string; failure?: PreflightFailure }> {
-    const connection = providerConnection(settings);
-    if (
-      !settings.model.trim() ||
-      !connection ||
-      (settings.provider === CUSTOM_PROVIDER_ID && !settings.customBaseUrl.trim())
-    ) {
-      return { failure: { kind: "notSetUp", message: "No LLM connection set up.", fix: "setUpConnection" } };
-    }
-    const apiKey = await resolveApiKey(deps.secret, deps.env, {
-      secretName: connection.secretName,
-      envVar: connection.envVar,
-    });
-    if (!apiKey && settings.provider !== CUSTOM_PROVIDER_ID) {
-      const label = PROVIDER_PRESETS.find((preset) => preset.id === settings.provider)?.label;
-      return { failure: { kind: "noKey", message: `No API key for ${label}.`, fix: "setApiKey" } };
+  /** The connection checked, with its key read once for both the check and the request that follows it. */
+  async function preflight(settings: Settings): Promise<{ connection?: Connection; failure?: Failure }> {
+    const connection = openConnection(deps, settings);
+    try {
+      await connection.check();
+    } catch (error) {
+      return { failure: failureOf(error) };
     }
     const language = resolveTargetLanguage(settings.targetLanguage, settings.displayLanguage);
     if (!language.ok) {
@@ -227,13 +185,16 @@ export function createTwain(deps: TwainDeps): Twain {
         settings.targetLanguage === "auto"
           ? `VS Code's display language "${language.tag}" isn't in the Target language list.`
           : `Target language "${language.tag}" isn't in the Target language list.`;
-      return { failure: { kind: "unsupportedDisplayLanguage", message, fix: "openTargetLanguageSetting" } };
+      return { failure: { message, fix: "openTargetLanguageSetting" } };
     }
-    return { apiKey };
+    return { connection };
   }
 
   /** Validate the live settings before sending; changed settings need a fresh render. */
-  async function dispatchPreflight(current: Run, expectedSettings: Settings) {
+  async function dispatchPreflight(
+    current: Run,
+    expectedSettings: Settings,
+  ): Promise<Connection | undefined> {
     const settings = deps.settings();
     const check = await preflight(settings);
     if (current !== run) return;
@@ -247,7 +208,7 @@ export function createTwain(deps: TwainDeps): Twain {
       updateStatus();
       return;
     }
-    return check;
+    return check.connection;
   }
 
   /** Until a document's brief lands, `context` is undefined and every Block is a miss. */
@@ -275,18 +236,11 @@ export function createTwain(deps: TwainDeps): Twain {
     quietTimer = deps.clock.setTimeout(endQuietPeriod, QUIET_MS);
   }
 
-  function briefContext(briefKey: string, base: TranslationContext): TranslationContext | undefined {
-    const saved = briefs.get(briefKey);
-    // The cached brief and translations may still match after a setting change,
-    // while the source of the key for a new request may have changed.
-    return saved && { ...saved, keySource: base.keySource };
-  }
-
   function endQuietPeriod(): void {
     quietTimer = undefined;
     if (halted) return;
     for (const render of latestRenders.values()) {
-      const context = briefContext(render.briefKey, render.base);
+      const context = briefs.get(render.briefKey);
       if (context) enqueueBatches(context, render.misses, render.settings);
       // A render with no misses still replaces the misses waiting for a brief in flight.
       else if (render.misses.size > 0 || run?.pending.has(render.briefKey)) enqueueBrief(render);
@@ -366,15 +320,18 @@ export function createTwain(deps: TwainDeps): Twain {
 
   async function dispatchBrief(current: Run, render: DocumentRender): Promise<void> {
     let brief: string;
+    let connection: Connection;
     try {
-      const check = await dispatchPreflight(current, render.settings);
-      if (!check) return;
+      const checked = await dispatchPreflight(current, render.settings);
+      if (!checked) return;
+      connection = checked;
       const text = deps.readDocument(render.uri);
       if (text === undefined) throw new Error("The document's text can't be read");
       const input = text.slice(0, BRIEF_INPUT_CHARS);
-      brief = await send(
-        deps.fetch,
-        buildBriefRequest(render.base, input, check.apiKey, current.controller.signal),
+      brief = await connection.complete(
+        briefSystemPrompt(render.base.targetLanguage),
+        briefUserMessage(input),
+        current.controller.signal,
       );
       if (!brief.trim()) throw new EmptyBriefError("Document brief came back empty. Retry translation.");
     } catch (error) {
@@ -386,12 +343,7 @@ export function createTwain(deps: TwainDeps): Twain {
           render.base,
           covered === 1 ? "1 Block" : `${covered} Blocks`,
         );
-        haltRun(
-          current,
-          error instanceof EmptyBriefError
-            ? { message: error.message }
-            : classifyConnectionError(error, render.settings, render.settings.reasoningEffort !== "default"),
-        );
+        haltRun(current, failureOf(error));
       }
       return;
     }
@@ -402,7 +354,7 @@ export function createTwain(deps: TwainDeps): Twain {
     const misses = current.awaitingBrief.get(render.briefKey) ?? new Map();
     current.awaitingBrief.delete(render.briefKey);
     current.pending.delete(render.briefKey);
-    const context = brief ? translationContext(render.settings, brief) : undefined;
+    const context = brief ? translationContext(render.settings, connection, brief) : undefined;
     if (context) {
       briefs.set(render.briefKey, context);
       enqueueBatches(context, misses, render.settings);
@@ -416,11 +368,15 @@ export function createTwain(deps: TwainDeps): Twain {
     const { context, settings } = batch[0];
     let responseParts: string[] | undefined;
     try {
-      const check = await dispatchPreflight(current, settings);
-      if (!check) return;
+      const connection = await dispatchPreflight(current, settings);
+      if (!connection) return;
       const input = batchInput(batch.map((miss) => miss.input));
-      const request = buildRequest(context, input, check.apiKey, current.controller.signal);
-      responseParts = splitBatchResponse(await send(deps.fetch, request), batch.length);
+      const answer = await connection.complete(
+        context.system,
+        context.userPrefix + input,
+        current.controller.signal,
+      );
+      responseParts = splitBatchResponse(answer, batch.length);
     } catch (error) {
       if (current === run) {
         logRequestFailure(
@@ -429,7 +385,7 @@ export function createTwain(deps: TwainDeps): Twain {
           context,
           batch.length === 1 ? "1 Block" : `${batch.length} Blocks`,
         );
-        haltRun(current, classifyConnectionError(error, settings, settings.reasoningEffort !== "default"));
+        haltRun(current, failureOf(error));
       }
       return;
     }
@@ -471,8 +427,13 @@ export function createTwain(deps: TwainDeps): Twain {
     context: TranslationContext,
     subject: string,
   ): void {
-    const status = error instanceof RequestError && error.status !== undefined ? `${error.status} ` : "";
-    const message = error instanceof Error ? error.message : String(error);
+    const status = error instanceof ConnectionFailure && error.status !== undefined ? `${error.status} ` : "";
+    const message =
+      error instanceof ConnectionFailure
+        ? error.detail
+        : error instanceof Error
+          ? error.message
+          : String(error);
     const failure =
       error instanceof EmptyBriefError
         ? "Document brief returned empty content"
@@ -480,7 +441,7 @@ export function createTwain(deps: TwainDeps): Twain {
     deps.log.error(`${failure} (${subject}, ${context.url}, model ${context.model})`);
   }
 
-  function haltRun(current: Run, classified: RunError): void {
+  function haltRun(current: Run, classified: Failure): void {
     if (current !== run) return;
     halted = classified;
     run = undefined;
@@ -506,14 +467,14 @@ export function createTwain(deps: TwainDeps): Twain {
 
       // A copy, so that a brief landing later is built from the settings of this render.
       const settings = { ...deps.settings() };
-      const base = translationContext(settings);
+      const base = translationContext(settings, openConnection(deps, settings));
       const document: unknown = env?.currentDocument;
       let context: TranslationContext | undefined;
       let documentRender: DocumentRender | undefined;
       if (document != null && base) {
         const uri = String(document);
         const briefKey = briefKeyOf(uri, base);
-        context = briefContext(briefKey, base);
+        context = briefs.get(briefKey);
         // After a failed brief, the document has no misses until a retry.
         if (!failed.has(briefKey)) {
           documentRender = { uri, settings, base, briefKey, misses: new Map() };
@@ -565,27 +526,6 @@ export function createTwain(deps: TwainDeps): Twain {
 
   return {
     markdownItPlugin,
-    setupSteps,
-    listModels: (settings, keyChoice) =>
-      listModels(
-        { fetch: deps.fetch, secret: deps.secret, env: deps.env, now: () => deps.clock.now() },
-        settings,
-        keyChoice,
-      ),
-    testConnection: async (settings, keyChoice) => {
-      const elapsed = await testConnection(
-        { fetch: deps.fetch, secret: deps.secret, env: deps.env, now: () => deps.clock.now() },
-        settings,
-        keyChoice,
-      );
-      if (mode !== "originalOnly") {
-        clearFailures();
-        deps.refresh();
-        updateStatus();
-      }
-      return elapsed;
-    },
-    classifyConnectionError,
     async setDisplayMode(next) {
       const version = ++modePickVersion;
       if (next !== "originalOnly") {
@@ -633,6 +573,11 @@ export function createTwain(deps: TwainDeps): Twain {
       runEndListeners.push(listener);
     },
   };
+}
+
+function failureOf(error: unknown): Failure {
+  if (error instanceof ConnectionFailure && error.fix) return { message: error.message, fix: error.fix };
+  return { message: error instanceof Error ? error.message : String(error) };
 }
 
 /** A Block's raw inline Markdown under a translation context that covers its whole request. */
