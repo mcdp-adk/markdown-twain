@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Refactored LLM connection setup and translation execution without intentional changes to user-facing behavior.
+
 ## 0.1.0
 
 The first Marketplace release.
