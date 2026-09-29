@@ -3,7 +3,15 @@
 
 import type { MarkdownIt } from "markdown-it";
 import * as vscode from "vscode";
-import type { ConnectionSettings, KeyChoice } from "./core/connection.ts";
+import {
+  type ConnectionDeps,
+  ConnectionFailure,
+  type ConnectionSettings,
+  type KeyChoice,
+  keySource,
+  openConnection,
+  setupSteps,
+} from "./core/connection.ts";
 import {
   CUSTOM_PROVIDER_ID,
   PROVIDER_PRESETS,
@@ -11,7 +19,7 @@ import {
   type ReasoningEffort,
 } from "./core/providers.ts";
 import type { Settings } from "./core/request.ts";
-import { createTwain, type DisplayMode, type Status, type Twain } from "./core/twain.ts";
+import { createTwain, type DisplayMode, type Failure, type Status, type Twain } from "./core/twain.ts";
 
 const FIX_ACTIONS = {
   setUpConnection: ["Set Up LLM Connection", "markdownTwain.setUpConnection"],
@@ -24,17 +32,20 @@ const FIX_ACTIONS = {
 export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(md: MarkdownIt): MarkdownIt } {
   const log = vscode.window.createOutputChannel("markdown-twain", { log: true });
 
-  const twain = createTwain({
+  const deps: ConnectionDeps = {
     fetch: globalThis.fetch,
-    refresh: () => void vscode.commands.executeCommand("markdown.preview.refresh"),
     clock: {
       setTimeout: (callback, ms) => setTimeout(callback, ms),
       clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
       now: () => Date.now(),
     },
-    settings: readSettings,
     secret: async (name) => context.secrets.get(name),
     env: process.env,
+  };
+  const twain = createTwain({
+    ...deps,
+    refresh: () => void vscode.commands.executeCommand("markdown.preview.refresh"),
+    settings: readSettings,
     readDocument: (uri) =>
       vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri)?.getText(),
     log,
@@ -50,7 +61,7 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
     if (selected === "Show Log") log.show();
     if (fix && selected === fix[0]) void vscode.commands.executeCommand(fix[1]);
   };
-  const showFailure = async (error: { message: string; fix?: keyof typeof FIX_ACTIONS }, retry = false) => {
+  const showFailure = async (error: Failure, retry = false) => {
     const fix = error.fix ? FIX_ACTIONS[error.fix] : undefined;
     const actions = [...(fix ? [fix[0]] : []), ...(retry ? ["Retry"] : [])];
     runFailureAction(await vscode.window.showErrorMessage(error.message, ...actions), fix);
@@ -76,7 +87,7 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
     );
     if (selected) await setDisplayMode(selected.mode);
   };
-  const connection = connectionCommands(context, twain);
+  const connection = connectionCommands(context, twain, deps);
 
   // Between the language mode item (100.1) and `status.editor.info` (100).
   const statusItem = vscode.window.createStatusBarItem(
@@ -273,20 +284,21 @@ function providerLabel(provider: string): string {
   return PROVIDER_PRESETS.find((preset) => preset.id === provider)?.label ?? "Custom";
 }
 
-function connectionCommands(context: vscode.ExtensionContext, twain: Twain) {
+function connectionCommands(context: vscode.ExtensionContext, twain: Twain, deps: ConnectionDeps) {
   const config = () => vscode.workspace.getConfiguration("markdownTwain");
-  const secretName = (provider: string) => `apiKey.${provider}`;
 
   async function showTestResult(): Promise<void> {
     const settings = readSettings();
     try {
-      const elapsed = await twain.testConnection(settings);
+      const elapsed = await openConnection(deps, settings).ping();
+      twain.retry();
       const effort = settings.reasoningEffort === "default" ? "" : ` · effort ${settings.reasoningEffort}`;
       await vscode.window.showInformationMessage(
         `Connected to ${providerLabel(settings.provider)} · ${settings.model}${effort}. First token after ${elapsed} ms`,
       );
     } catch (error) {
-      const failure = twain.classifyConnectionError(error, settings);
+      if (!(error instanceof ConnectionFailure)) throw error;
+      const failure = error;
       const fix = failure.fix ? FIX_ACTIONS[failure.fix] : undefined;
       const selected = fix
         ? await vscode.window.showErrorMessage(failure.message, fix[0])
@@ -319,10 +331,11 @@ function connectionCommands(context: vscode.ExtensionContext, twain: Twain) {
     settings: ConnectionSettings,
     options: StepOptions,
   ): Promise<StepResult<KeyChoice>> {
-    const saved = await context.secrets.get(secretName(settings.provider));
+    const source = keySource(settings);
+    const saved = await context.secrets.get(source.secretName);
     const preset = PROVIDER_PRESETS.find((item) => item.id === settings.provider);
-    const envName = preset?.apiKeyEnv ?? settings.customApiKeyEnv;
-    const hasEnv = Boolean(envName && process.env[envName]);
+    const envName = source.envVar;
+    const hasEnv = Boolean(envName && deps.env[envName]);
     const items: Choice<"saved" | "new" | "env" | "none">[] = [];
     if (saved) items.push({ label: "Keep the saved key", description: "••••••••", value: "saved" });
     items.push({ label: saved ? "Replace it with a new key…" : "Enter an API key…", value: "new" });
@@ -374,12 +387,13 @@ function connectionCommands(context: vscode.ExtensionContext, twain: Twain) {
     let models: string[] = [];
     let message: string | undefined;
     try {
-      models = await twain.listModels(settings, key);
+      models = await openConnection(deps, settings, key).listModels();
       if (previousModel && !models.includes(previousModel)) {
         message = `Current model ${previousModel} is not in this provider's model list.`;
       }
     } catch (error) {
-      message = `Could not load models: ${twain.classifyConnectionError(error, settings).message}`;
+      if (!(error instanceof ConnectionFailure)) throw error;
+      message = `Could not load models: ${error.message}`;
     }
     const items: Choice<string>[] = [
       { label: "Enter a model ID…", detail: message, value: "" },
@@ -420,9 +434,10 @@ function connectionCommands(context: vscode.ExtensionContext, twain: Twain) {
     return pick(items, { ...options, placeHolder: "Reasoning effort applies to every provider." }, items[0]);
   }
 
-  async function saveKey(provider: string, key: KeyChoice): Promise<void> {
-    if (key.kind === "new") await context.secrets.store(secretName(provider), key.value);
-    else if (key.kind !== "saved") await context.secrets.delete(secretName(provider));
+  async function saveKey(settings: ConnectionSettings, key: KeyChoice): Promise<void> {
+    const { secretName } = keySource(settings);
+    if (key.kind === "new") await context.secrets.store(secretName, key.value);
+    else if (key.kind !== "saved") await context.secrets.delete(secretName);
   }
 
   async function setUp(): Promise<void> {
@@ -432,7 +447,7 @@ function connectionCommands(context: vscode.ExtensionContext, twain: Twain) {
     const snapshots: { settings: ConnectionSettings; key: KeyChoice | undefined }[] = [];
     let index = 0;
     while (true) {
-      const steps = twain.setupSteps(draft.provider, draft.reasoningEffort);
+      const steps = setupSteps(draft.provider, draft.reasoningEffort);
       if (index >= steps.length) break;
       const step = steps[index];
       const options: StepOptions = {
@@ -481,7 +496,7 @@ function connectionCommands(context: vscode.ExtensionContext, twain: Twain) {
       else draft.reasoningEffort = result.value as ReasoningEffort;
       index++;
     }
-    if (key) await saveKey(draft.provider, key);
+    if (key) await saveKey(draft, key);
     for (const field of [
       "provider",
       "customBaseUrl",
@@ -517,7 +532,7 @@ function connectionCommands(context: vscode.ExtensionContext, twain: Twain) {
     const settings = readSettings();
     const result = await chooseKey(settings, { title: "Set API Key" });
     if (result.kind !== "selected") return;
-    await saveKey(settings.provider, result.value);
+    await saveKey(settings, result.value);
     if (settings.provider === CUSTOM_PROVIDER_ID) {
       const env = result.value.kind === "env" ? result.value.name : "";
       await config().update("customApiKeyEnv", env, vscode.ConfigurationTarget.Global);
@@ -527,11 +542,12 @@ function connectionCommands(context: vscode.ExtensionContext, twain: Twain) {
 
   async function clearApiKey(): Promise<void> {
     const settings = readSettings();
-    if (!(await context.secrets.get(secretName(settings.provider)))) {
+    const { secretName } = keySource(settings);
+    if (!(await context.secrets.get(secretName))) {
       await vscode.window.showInformationMessage(`No saved API key for ${providerLabel(settings.provider)}.`);
       return;
     }
-    await context.secrets.delete(secretName(settings.provider));
+    await context.secrets.delete(secretName);
     await showTestResult();
   }
 

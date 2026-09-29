@@ -20,11 +20,7 @@ const DOC = "file:///doc.md";
 describe("scenario 14: pre-flight checks", () => {
   it("rejects an empty model without refreshing or requesting", async () => {
     const s = scenario({ settings: { model: "" } });
-    expect(await s.setDisplayMode("bilingual")).toEqual({
-      kind: "notSetUp",
-      message: "No LLM connection set up.",
-      fix: "setUpConnection",
-    });
+    expect(await s.setDisplayMode("bilingual")).toEqual({ message: "Select a model.", fix: "selectModel" });
     expect(s.twain.displayMode).toBe("originalOnly");
     expect(s.refreshes).toBe(0);
     s.render(DOC, "Hello.\n");
@@ -32,32 +28,9 @@ describe("scenario 14: pre-flight checks", () => {
     expect(s.requests).toHaveLength(0);
   });
 
-  it("rejects a Custom provider without a base URL", async () => {
-    const s = scenario({ settings: { provider: "custom", customBaseUrl: "" }, env: {} });
-    expect(await s.setDisplayMode("translationOnly")).toEqual({
-      kind: "notSetUp",
-      message: "No LLM connection set up.",
-      fix: "setUpConnection",
-    });
-    expect(s.twain.displayMode).toBe("originalOnly");
-    expect(s.refreshes).toBe(0);
-  });
-
-  it("rejects a Provider preset without a saved or environment key", async () => {
-    const s = scenario({ settings: { provider: "openai" }, env: {} });
-    expect(await s.setDisplayMode("bilingual")).toEqual({
-      kind: "noKey",
-      message: "No API key for OpenAI.",
-      fix: "setApiKey",
-    });
-    expect(s.twain.displayMode).toBe("originalOnly");
-    expect(s.refreshes).toBe(0);
-  });
-
   it("rejects an unsupported VS Code display language with its original tag", async () => {
     const s = scenario({ settings: { targetLanguage: "auto", displayLanguage: "xx-XX" } });
     expect(await s.setDisplayMode("bilingual")).toEqual({
-      kind: "unsupportedDisplayLanguage",
       message: "VS Code's display language \"xx-XX\" isn't in the Target language list.",
       fix: "openTargetLanguageSetting",
     });
@@ -70,7 +43,7 @@ describe("scenario 14: pre-flight checks", () => {
     const s = scenario({ env });
     await s.setDisplayMode("bilingual");
     delete env.OPENROUTER_API_KEY;
-    expect(await s.setDisplayMode("translationOnly")).toMatchObject({ kind: "noKey" });
+    expect(await s.setDisplayMode("translationOnly")).toMatchObject({ fix: "setApiKey" });
     expect(s.twain.displayMode).toBe("originalOnly");
   });
 
@@ -85,18 +58,6 @@ describe("scenario 14: pre-flight checks", () => {
     expect(s.refreshes).toBe(0);
   });
 
-  it("allows a keyless Custom provider and omits Authorization", async () => {
-    const s = scenario({
-      settings: { provider: "custom", customBaseUrl: "http://localhost:1234/v1" },
-      env: {},
-    });
-    expect(await s.setDisplayMode("bilingual")).toBeUndefined();
-    s.render(DOC, "Hello.\n");
-    await s.settle();
-    expect(s.requests).toHaveLength(2);
-    expect(s.requests.every((request) => !("Authorization" in request.headers))).toBe(true);
-  });
-
   it("halts before the first dispatch when a preset key is removed", async () => {
     const env: Record<string, string | undefined> = { OPENROUTER_API_KEY: "key" };
     const s = scenario({ env });
@@ -104,7 +65,7 @@ describe("scenario 14: pre-flight checks", () => {
     s.render(DOC, "Hello.\n");
     delete env.OPENROUTER_API_KEY;
     await s.settle();
-    const error = { kind: "noKey", message: "No API key for OpenRouter.", fix: "setApiKey" };
+    const error = { message: "No API key for OpenRouter.", fix: "setApiKey" };
     expect(s.requests).toHaveLength(0);
     expect(s.twain.status).toEqual({ kind: "halted", error });
     expect(s.runEnds).toEqual([{ kind: "halted", error }]);
@@ -116,7 +77,7 @@ describe("scenario 14: pre-flight checks", () => {
     s.render(DOC, "Hello.\n");
     s.settings.model = "";
     await s.settle();
-    const error = { kind: "notSetUp", message: "No LLM connection set up.", fix: "setUpConnection" };
+    const error = { message: "Select a model.", fix: "selectModel" };
     expect(s.requests).toHaveLength(0);
     expect(s.runEnds).toEqual([{ kind: "halted", error }]);
   });
@@ -150,7 +111,7 @@ describe("scenario 14: pre-flight checks", () => {
     await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
-    const error = { kind: "noKey", message: "No API key for OpenRouter.", fix: "setApiKey" };
+    const error = { message: "No API key for OpenRouter.", fix: "setApiKey" };
     expect(s.requests.map((request) => request.kind)).toEqual(["brief"]);
     expect(s.runEnds).toEqual([{ kind: "halted", error }]);
   });
@@ -942,77 +903,6 @@ describe("status", () => {
 });
 
 describe("requests", () => {
-  it.each([
-    ["openrouter", "low", { reasoning: { effort: "low" } }],
-    ["openai", "high", { reasoning_effort: "high" }],
-    ["deepseek", "none", { reasoning_effort: "none" }],
-  ] as const)("carry the %s effort style", async (provider, reasoningEffort, field) => {
-    const s = scenario({
-      settings: { provider, reasoningEffort },
-      env: { OPENROUTER_API_KEY: "k", OPENAI_API_KEY: "k", DEEPSEEK_API_KEY: "k" },
-    });
-    await s.setDisplayMode("bilingual");
-    s.render(DOC, "Hello.\n");
-    await s.settle();
-
-    expect(s.sent[0].body).toMatchObject(field);
-    expect(Object.keys(s.sent[0].body).sort()).toEqual(
-      ["model", "messages", "stream", ...Object.keys(field)].sort(),
-    );
-  });
-
-  it.each(["openrouter", "openai"])("carry no effort field at default for %s", async (provider) => {
-    const s = scenario({
-      settings: { provider, reasoningEffort: "default" },
-      env: { OPENROUTER_API_KEY: "k", OPENAI_API_KEY: "k" },
-    });
-    await s.setDisplayMode("bilingual");
-    s.render(DOC, "Hello.\n");
-    await s.settle();
-
-    expect(Object.keys(s.sent[0].body).sort()).toEqual(["messages", "model", "stream"]);
-  });
-
-  it("take the key from SecretStorage before the environment", async () => {
-    const s = scenario({ secrets: { "apiKey.openrouter": "sk-secret" } });
-    await s.setDisplayMode("bilingual");
-    s.render(DOC, "Hello.\n");
-    await s.settle();
-
-    expect(s.sent[0].headers.Authorization).toBe("Bearer sk-secret");
-  });
-
-  it("go to a Custom base URL as entered, and carry no Authorization without a key", async () => {
-    const s = scenario({
-      settings: {
-        provider: "custom",
-        customBaseUrl: "http://localhost:1234/api/chat/completions/",
-        reasoningEffort: "low",
-      },
-      env: {},
-    });
-    await s.setDisplayMode("bilingual");
-    s.render(DOC, "Hello.\n");
-    await s.settle();
-
-    expect(s.sent[0].url).toBe("http://localhost:1234/api/chat/completions");
-    expect(s.sent[0].headers).toEqual({ "Content-Type": "application/json" });
-    expect(s.sent[0].body.reasoning_effort).toBe("low");
-  });
-
-  it("read a Custom key from customApiKeyEnv", async () => {
-    const s = scenario({
-      settings: { provider: "custom", customBaseUrl: "http://localhost:1234", customApiKeyEnv: "MY_KEY" },
-      env: { MY_KEY: "sk-mine" },
-    });
-    await s.setDisplayMode("bilingual");
-    s.render(DOC, "Hello.\n");
-    await s.settle();
-
-    expect(s.sent[0].url).toBe("http://localhost:1234/chat/completions");
-    expect(s.sent[0].headers.Authorization).toBe("Bearer sk-mine");
-  });
-
   it("follow a resolved auto Target language, cached under the resolved tag", async () => {
     const s = scenario({ settings: { targetLanguage: "auto", displayLanguage: "zh-tw" } });
     await s.setDisplayMode("bilingual");
@@ -1312,51 +1202,6 @@ describe("request failure handling", () => {
 });
 
 describe("retry and halted runs", () => {
-  it("honors Retry-After on a 429 before retrying", async () => {
-    let attempts = 0;
-    const s = scenario({
-      reply: () =>
-        attempts++ === 0
-          ? {
-              status: 429,
-              body: { error: { message: "Rate limited" } },
-              headers: { "Retry-After": "2" },
-            }
-          : { content: "译 Hello." },
-    });
-    await s.setDisplayMode("bilingual");
-    s.render(DOC, "Hello.\n");
-    await s.advance(QUIET_MS + LATENCY_MS);
-
-    expect(s.sent).toHaveLength(1);
-    await s.advance(1_999);
-    expect(s.sent).toHaveLength(1);
-    await s.advance(1 + LATENCY_MS);
-
-    expect(s.sent).toHaveLength(2);
-    await s.settle();
-    expect(s.twain.status).toEqual({ kind: "idle" });
-    expect(s.render(DOC, "Hello.\n")).toContain('<div class="twain-t">译 Hello.</div>');
-    expect(s.runEnds).toEqual([]);
-  });
-
-  it("halts when Retry-After exceeds 30 seconds", async () => {
-    const s = scenario({
-      reply: () => ({
-        status: 429,
-        body: { error: { message: "Rate limited" } },
-        headers: { "Retry-After": "31" },
-      }),
-    });
-    await s.setDisplayMode("bilingual");
-    s.render(DOC, "Hello.\n");
-    await s.settle();
-
-    expect(s.sent).toHaveLength(1);
-    expect(s.twain.status).toEqual({ kind: "halted", error: { message: "Rate limited" } });
-    expect(s.runEnds).toEqual([{ kind: "halted", error: { message: "Rate limited" } }]);
-  });
-
   it("halts once on a 401 and exposes the classified fix", async () => {
     const s = scenario({
       reply: () => ({ status: 401, body: { error: { message: "No auth credentials found" } } }),
@@ -1393,24 +1238,6 @@ describe("retry and halted runs", () => {
     expect(s.sent).toHaveLength(4);
   });
 
-  it("offers Select Model when the provider rejects an unknown model with 400", async () => {
-    const s = scenario({
-      settings: { model: "missing-model", reasoningEffort: "low" },
-      briefReply: () => ({
-        status: 400,
-        body: { error: { message: "missing-model is not a valid model ID" } },
-      }),
-    });
-    await s.setDisplayMode("bilingual");
-    s.render(DOC, "Hello.\n");
-    await s.settle();
-
-    expect(s.twain.status).toEqual({
-      kind: "halted",
-      error: { message: "missing-model is not a valid model ID", fix: "selectModel" },
-    });
-  });
-
   it("halts when the Document brief fails and sends no translations", async () => {
     const s = scenario({
       briefReply: () => ({ status: 401, body: { error: { message: "Bad credentials" } } }),
@@ -1427,23 +1254,7 @@ describe("retry and halted runs", () => {
     expect(s.runEnds).toEqual([{ kind: "halted", error: { message: "Bad credentials", fix: "setApiKey" } }]);
   });
 
-  it("times out a hung request after 120 seconds and retries it twice", async () => {
-    const s = scenario({ latencyMs: 10 * 60_000 });
-    await s.setDisplayMode("bilingual");
-    s.render(DOC, "Hello.\n");
-    await s.settle();
-
-    expect(s.requests.map((request) => request.kind)).toEqual(["brief", "brief", "brief"]);
-    expect(s.aborted).toBe(3);
-    expect(s.twain.status.kind).toBe("halted");
-    if (s.twain.status.kind === "halted") {
-      expect(s.twain.status.error.message).toContain("120 seconds");
-    }
-    expect(s.runEnds).toHaveLength(1);
-    expect(s.runEnds[0].kind).toBe("halted");
-  });
-
-  it("resumes a halted run after Test Connection and retries only unlanded Blocks", async () => {
+  it("resumes a halted run after Retry and retries only unlanded Blocks", async () => {
     let attempts = 0;
     const doc = Array.from({ length: 5 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n");
     const s = scenario({
@@ -1453,15 +1264,13 @@ describe("retry and halted runs", () => {
         if (attempts === 2) return { status: 401, body: { error: { message: "Bad credentials" } } };
         return { content: joinResponseParts(request.blocks.map(fakeTranslation)) };
       },
-      connectionFetch: () =>
-        new Response("data: ping\n\n", { headers: { "Content-Type": "text/event-stream" } }),
     });
     await s.setDisplayMode("bilingual");
     s.render(DOC, doc);
     await s.settle();
 
     expect(s.twain.status.kind).toBe("halted");
-    await s.twain.testConnection(s.settings);
+    s.retry();
     expect(s.twain.status).toEqual({ kind: "idle" });
     s.render(DOC, doc);
     await s.settle();
@@ -1475,24 +1284,32 @@ describe("retry and halted runs", () => {
     expect(s.twain.status).toEqual({ kind: "idle" });
   });
 
-  it("retries empty Blocks after a successful Test Connection in a translated mode", async () => {
-    let attempts = 0;
+  it("logs a Document brief's network failure with its sanitized cause", async () => {
+    const key = "mock-secret-key";
     const s = scenario({
-      reply: () => ({ content: attempts++ === 0 ? "" : "译 Hello." }),
-      connectionFetch: () =>
-        new Response("data: ping\n\n", { headers: { "Content-Type": "text/event-stream" } }),
+      secrets: { "apiKey.openrouter": key },
+      briefReply: () => {
+        throw Object.assign(new Error(`fetch failed with ${key}`), {
+          cause: { code: "ECONNRESET", message: `connection reset for ${key}` },
+        });
+      },
     });
     await s.setDisplayMode("bilingual");
     s.render(DOC, "Hello.\n");
     await s.settle();
-    expect(s.twain.status).toEqual({ kind: "someFailed", count: 1, total: 1 });
 
-    await s.twain.testConnection(s.settings);
-    expect(s.twain.status).toEqual({ kind: "idle" });
-    s.render(DOC, "Hello.\n");
-    await s.settle();
-    expect(s.sent).toHaveLength(2);
-    expect(s.render(DOC, "Hello.\n")).toContain('<div class="twain-t">译 Hello.</div>');
+    expect(s.runEnds).toEqual([
+      {
+        kind: "halted",
+        error: {
+          message: "ECONNRESET connection reset for [redacted]. Check VS Code's `http.proxy` setting.",
+        },
+      },
+    ]);
+    expect(s.logLines.join("\n")).toContain(
+      "Document brief request failed: ECONNRESET connection reset for [redacted]",
+    );
+    expect(s.logLines.join("\n")).not.toContain(key);
   });
 
   it("never writes the API key or headers to the log", async () => {
