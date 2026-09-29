@@ -2,9 +2,10 @@
   "name": "markdown-twain",
   "displayName": "markdown-twain",
   "description": "Translate the built-in Markdown preview with an LLM.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "publisher": "mcdp-adk",
+  "icon": "media/icon.png",
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",

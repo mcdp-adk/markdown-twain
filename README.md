@@ -2,17 +2,15 @@
 
 markdown-twain translates VS Code's built-in Markdown preview with an LLM. It works in desktop VS Code 1.96 or later with a provider that supports the OpenAI-compatible Chat Completions API. You choose the provider, model, and Target language. Opening a preview in **Original Only** sends no document text to the provider; translation starts when you select a translated Display mode.
 
-## Install locally
+## Install
 
-Install Node.js 22 and pnpm 12.6.0, then run these commands from the repository root:
+Search for **markdown-twain** in VS Code's Extensions view and select **Install**, or run:
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm package
-code --install-extension ./markdown-twain-0.0.1.vsix
+code --install-extension mcdp-adk.markdown-twain
 ```
 
-`pnpm package` builds the extension and writes the `.vsix` in the repository root. Use the generated filename if the version in `package.json` has changed. If the `code` command is unavailable, open VS Code's Extensions view, select **Install from VSIX...**, and choose that file. The extension is for desktop VS Code; it is not published to an extension marketplace.
+The extension is for desktop VS Code. To build a VSIX yourself, see [Build a VSIX from source](docs/releasing.md#build-a-vsix-from-source).
 
 ## Translate a document
 
