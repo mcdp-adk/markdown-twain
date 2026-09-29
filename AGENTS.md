@@ -16,7 +16,6 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 ## Invariants
 
-- No two sessions share a working tree; worktrees live in `.claude/worktrees/`.
 - Changes reach `main` through a PR unless the owner asks for a direct commit.
 - Every ticked acceptance criterion has evidence, and an issue closes only with every criterion ticked.
 - A PR for an issue starts with `Closes #N` when it finishes the issue, or `Refs #N` when it doesn't.
