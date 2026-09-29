@@ -1,15 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { ConnectionSettings } from "./connection.ts";
+import { ConnectionFailure, type ConnectionSettings } from "./connection.ts";
 import {
   type Choice,
+  type ConnectionSetup,
+  createConnectionSetup,
   type InputOptions,
   type Prompter,
   type StepOptions,
   type StepResult,
-  selectModel,
-  setApiKey,
-  setReasoningEffort,
-  setUpConnection,
 } from "./connection-setup.ts";
 
 const SETTINGS: ConnectionSettings = {
@@ -39,6 +37,9 @@ interface SetupOptions {
   env?: Record<string, string | undefined>;
   /** The provider's answer to `GET /models`; the default lists `MODELS`. */
   models?: () => Response;
+  ping?: () => Response;
+  failWrite?: (operation: string) => Error | undefined;
+  informationError?: Error;
 }
 
 const MODELS = ["openai/gpt-6-luna", "vendor/other"];
@@ -47,9 +48,14 @@ const MODELS = ["openai/gpt-6-luna", "vendor/other"];
  * Runs a Connection setup command against a user who gives `answers` in order,
  * and a provider that lists `MODELS`.
  */
-async function setUp(command: typeof setUpConnection, answers: Answer[], options: SetupOptions = {}) {
+function prepare(command: keyof ConnectionSetup, answers: Answer[], options: SetupOptions = {}) {
   const shown: Shown[] = [];
-  const modelRequests: { url: string; headers: Record<string, string> }[] = [];
+  const requests: { url: string; headers: Record<string, string>; body?: Record<string, unknown> }[] = [];
+  const effects: string[] = [];
+  const settings = { ...SETTINGS, ...options.settings };
+  const secrets = { ...options.secrets };
+  const failures: ConnectionFailure[] = [];
+  const information: string[] = [];
   const next = (kind: Shown["kind"]): Answer => {
     const answer = answers.shift();
     if (answer === undefined) throw new Error(`No answer left for ${JSON.stringify(shown.at(-1))}`);
@@ -79,45 +85,106 @@ async function setUp(command: typeof setUpConnection, answers: Answer[], options
       return { kind: "selected", value: (answer as { input: string }).input };
     },
   };
-  const result = await command(
+  const setup = createConnectionSetup(
     {
       fetch: (async (url: string, init: RequestInit) => {
-        modelRequests.push({ url, headers: init.headers as Record<string, string> });
-        return options.models?.() ?? Response.json({ data: MODELS.map((id) => ({ id })) });
+        requests.push({
+          url,
+          headers: init.headers as Record<string, string>,
+          ...(init.body ? { body: JSON.parse(init.body as string) } : {}),
+        });
+        return url.endsWith("/models")
+          ? (options.models?.() ?? Response.json({ data: MODELS.map((id) => ({ id })) }))
+          : (options.ping?.() ??
+              new Response("data: {}\n\n", { headers: { "Content-Type": "text/event-stream" } }));
       }) as typeof fetch,
-      secret: async (name) => options.secrets?.[name],
+      secret: async (name) => secrets[name],
       env: options.env ?? { OPENROUTER_API_KEY: "sk-or-env" },
       clock: {
         setTimeout: (callback, ms) => setTimeout(callback, ms),
         clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-        now: () => Date.now(),
+        now: () => 100,
+      },
+      settings: () => ({ ...settings }),
+      updateSetting: async (field, value) => {
+        effects.push(`setting:${field}`);
+        const error = options.failWrite?.(`setting:${field}`);
+        if (error) throw error;
+        Object.assign(settings, { [field]: value });
+      },
+      storeSecret: async (name, value) => {
+        effects.push(`store:${name}`);
+        const error = options.failWrite?.(`store:${name}`);
+        if (error) throw error;
+        secrets[name] = value;
+      },
+      deleteSecret: async (name) => {
+        effects.push(`delete:${name}`);
+        const error = options.failWrite?.(`delete:${name}`);
+        if (error) throw error;
+        delete secrets[name];
+      },
+      retryTranslation: () => effects.push("retry"),
+      showInformation: async (message) => {
+        information.push(message);
+        effects.push("information");
+        if (options.informationError) throw options.informationError;
+      },
+      showFailure: async (failure) => {
+        failures.push(failure);
+        effects.push("failure");
       },
     },
     prompter,
-    { ...SETTINGS, ...options.settings },
   );
-  if (answers.length > 0) throw new Error(`Unused answers: ${JSON.stringify(answers)}`);
-  return { result, shown, modelRequests };
+  return {
+    settings,
+    secrets,
+    shown,
+    requests,
+    effects,
+    failures,
+    information,
+    async run() {
+      await setup[command]();
+      if (answers.length > 0) throw new Error(`Unused answers: ${JSON.stringify(answers)}`);
+    },
+  };
+}
+
+async function setUp(command: keyof ConnectionSetup, answers: Answer[], options: SetupOptions = {}) {
+  const harness = prepare(command, answers, options);
+  await harness.run();
+  return harness;
 }
 
 describe("Set Up LLM Connection", () => {
-  it("walks a Provider preset through its steps and returns only what changed", async () => {
-    const { result, shown, modelRequests } = await setUp(setUpConnection, [
+  it("walks a Provider preset through its steps and saves the connection", async () => {
+    const { settings, shown, requests, effects } = await setUp("setUp", [
       { pick: "OpenRouter" },
       { pick: "Use $OPENROUTER_API_KEY" },
       { pick: "openai/gpt-6-luna" },
     ]);
-    expect(result).toEqual({
-      settings: { provider: "openrouter", model: "openai/gpt-6-luna" },
-      secret: { kind: "delete", name: "apiKey.openrouter" },
-    });
+    expect(settings).toEqual({ ...SETTINGS, provider: "openrouter", model: "openai/gpt-6-luna" });
+    expect(effects).toEqual([
+      "delete:apiKey.openrouter",
+      "setting:provider",
+      "setting:model",
+      "retry",
+      "information",
+    ]);
     expect(shown.map((prompt) => [prompt.title, `${prompt.step}/${prompt.totalSteps}`])).toEqual([
       ["Set Up LLM Connection", "1/3"],
       ["Set Up LLM Connection", "2/3"],
       ["Set Up LLM Connection", "3/3"],
     ]);
-    expect(modelRequests).toEqual([
+    expect(requests).toEqual([
       { url: "https://openrouter.ai/api/v1/models", headers: { Authorization: "Bearer sk-or-env" } },
+      {
+        url: "https://openrouter.ai/api/v1/chat/completions",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer sk-or-env" },
+        body: { model: "openai/gpt-6-luna", messages: [{ role: "user", content: "ping" }], stream: true },
+      },
     ]);
   });
 
@@ -137,8 +204,8 @@ describe("Set Up LLM Connection", () => {
   ] as const)(
     "asks a Custom provider for its base URL and deletes the saved key when it takes $keyAnswers.0.pick",
     async ({ keyAnswers, env, customApiKeyEnv, headers }) => {
-      const { result, shown, modelRequests } = await setUp(
-        setUpConnection,
+      const { settings, secrets, shown, requests, effects } = await setUp(
+        "setUp",
         [
           { pick: "Custom…" },
           { input: "http://localhost:11434/v1" },
@@ -147,23 +214,32 @@ describe("Set Up LLM Connection", () => {
         ],
         { env, secrets: { "apiKey.custom": "sk-saved" } },
       );
-      expect(result).toEqual({
-        settings: {
-          provider: "custom",
-          customBaseUrl: "http://localhost:11434/v1",
-          ...(customApiKeyEnv && { customApiKeyEnv }),
-          model: "vendor/other",
-        },
-        secret: { kind: "delete", name: "apiKey.custom" },
+      expect(settings).toEqual({
+        ...SETTINGS,
+        provider: "custom",
+        customBaseUrl: "http://localhost:11434/v1",
+        customApiKeyEnv: customApiKeyEnv ?? "",
+        model: "vendor/other",
       });
+      expect(secrets["apiKey.custom"]).toBeUndefined();
       expect(shown[1]).toMatchObject({ kind: "input", step: 2, totalSteps: 4, required: true });
-      expect(modelRequests).toEqual([{ url: "http://localhost:11434/v1/models", headers }]);
+      expect(requests[0]).toEqual({ url: "http://localhost:11434/v1/models", headers });
+      expect(requests[1].url).toBe("http://localhost:11434/v1/chat/completions");
+      expect(effects).toEqual([
+        "delete:apiKey.custom",
+        "setting:provider",
+        "setting:customBaseUrl",
+        ...(customApiKeyEnv ? ["setting:customApiKeyEnv"] : []),
+        "setting:model",
+        "retry",
+        "information",
+      ]);
     },
   );
 
   it("goes Back from an input to its pick, and from a step to the draft before it", async () => {
-    const { result, shown } = await setUp(
-      setUpConnection,
+    const { settings, secrets, shown } = await setUp(
+      "setUp",
       [
         { pick: "OpenRouter" },
         { pick: "Enter an API key…" },
@@ -175,12 +251,10 @@ describe("Set Up LLM Connection", () => {
         { pick: "vendor/other" },
         { pick: "high" },
       ],
-      { settings: { reasoningEffort: "low" } },
+      { settings: { reasoningEffort: "low" }, env: { OPENAI_API_KEY: "sk-env" } },
     );
-    expect(result).toEqual({
-      settings: { model: "vendor/other", reasoningEffort: "high" },
-      secret: { kind: "store", name: "apiKey.openai", value: "sk-openai" },
-    });
+    expect(settings).toEqual({ ...SETTINGS, model: "vendor/other", reasoningEffort: "high" });
+    expect(secrets["apiKey.openai"]).toBe("sk-openai");
     expect(shown.map(({ title, step, active }) => [title, step, active])).toEqual([
       ["Set Up LLM Connection", 1, "OpenAI"],
       ["Set Up LLM Connection", 2, undefined],
@@ -195,24 +269,28 @@ describe("Set Up LLM Connection", () => {
   });
 
   it("asks for the Reasoning effort only when it isn't default, offering the current effort first", async () => {
-    const { shown } = await setUp(
-      setUpConnection,
+    const { shown, effects } = await setUp(
+      "setUp",
       [{ pick: "OpenRouter" }, { pick: "Use $OPENROUTER_API_KEY" }, { pick: "vendor/other" }, "cancel"],
       { settings: { reasoningEffort: "medium" } },
     );
     expect(shown.map((prompt) => prompt.totalSteps)).toEqual([4, 4, 4, 4]);
     expect(shown[3].active).toBe("medium");
     expect(shown[3].items?.[0]).toMatchObject({ label: "medium", current: true });
+    expect(effects).toEqual([]);
   });
 
   it("saves nothing when cancelled", async () => {
-    const { result } = await setUp(setUpConnection, [
+    const { settings, secrets, effects, requests } = await setUp("setUp", [
       { pick: "OpenRouter" },
       { pick: "Enter an API key…" },
       { input: "sk-new" },
       "cancel",
     ]);
-    expect(result).toBeUndefined();
+    expect(settings).toEqual(SETTINGS);
+    expect(secrets).toEqual({});
+    expect(effects).toEqual([]);
+    expect(requests.map((request) => request.url)).toEqual(["https://openrouter.ai/api/v1/models"]);
   });
 });
 
@@ -244,8 +322,8 @@ describe("API-key step", () => {
       placeHolder: undefined,
     },
   ])("offers the key sources of $name", async ({ settings, secrets, items, placeHolder }) => {
-    const { result, shown } = await setUp(setApiKey, ["cancel"], { settings, secrets });
-    expect(result).toBeUndefined();
+    const { shown, effects } = await setUp("setApiKey", ["cancel"], { settings, secrets });
+    expect(effects).toEqual([]);
     expect(shown[0].items).toEqual(items.map((item) => ({ detail: undefined, current: undefined, ...item })));
     expect(shown[0].placeHolder).toBe(placeHolder);
   });
@@ -253,15 +331,15 @@ describe("API-key step", () => {
 
 describe("model step", () => {
   it("shows why the model list failed and still takes a model ID", async () => {
-    const { result, shown } = await setUp(
-      selectModel,
+    const { settings, shown } = await setUp(
+      "selectModel",
       [{ pick: "Enter a model ID…" }, { input: "my/model" }],
       {
         settings: { provider: "openrouter", model: "vendor/other" },
         models: () => Response.json({ error: { message: "Upstream down" } }, { status: 500 }),
       },
     );
-    expect(result).toEqual({ settings: { model: "my/model" } });
+    expect(settings.model).toBe("my/model");
     expect(shown).toMatchObject([
       {
         placeHolder: "Could not load models: Upstream down",
@@ -272,7 +350,7 @@ describe("model step", () => {
   });
 
   it("names a current model the provider doesn't list", async () => {
-    const { shown } = await setUp(selectModel, ["cancel"], {
+    const { shown } = await setUp("selectModel", ["cancel"], {
       settings: { provider: "openrouter", model: "gone/model" },
     });
     expect(shown[0].placeHolder).toBe("Current model gone/model is not in this provider's model list.");
@@ -281,10 +359,16 @@ describe("model step", () => {
 
 describe("single-step commands", () => {
   it("Select Model marks the current model and changes only the model", async () => {
-    const { result, shown } = await setUp(selectModel, [{ pick: "openai/gpt-6-luna" }], {
+    const { settings, shown, effects } = await setUp("selectModel", [{ pick: "openai/gpt-6-luna" }], {
       settings: { provider: "openrouter", model: "vendor/other", reasoningEffort: "low" },
     });
-    expect(result).toEqual({ settings: { model: "openai/gpt-6-luna" } });
+    expect(settings).toEqual({
+      ...SETTINGS,
+      provider: "openrouter",
+      model: "openai/gpt-6-luna",
+      reasoningEffort: "low",
+    });
+    expect(effects).toEqual(["setting:model", "retry", "information"]);
     expect(shown).toMatchObject([
       {
         title: "Select Model",
@@ -298,10 +382,13 @@ describe("single-step commands", () => {
   });
 
   it("Set Reasoning Effort offers the current effort first and changes only the effort", async () => {
-    const { result, shown } = await setUp(setReasoningEffort, [{ pick: "high" }], {
+    const { settings, shown, effects, requests } = await setUp("setReasoningEffort", [{ pick: "high" }], {
       settings: { reasoningEffort: "low" },
+      env: { OPENAI_API_KEY: "sk-env" },
     });
-    expect(result).toEqual({ settings: { reasoningEffort: "high" } });
+    expect(settings.reasoningEffort).toBe("high");
+    expect(effects).toEqual(["setting:reasoningEffort", "retry", "information"]);
+    expect(requests[0].body?.reasoning_effort).toBe("high");
     expect(shown).toMatchObject([{ title: "Set Reasoning Effort", active: "low" }]);
     expect(shown[0].items?.map((item) => item.label)).toEqual([
       "low",
@@ -316,11 +403,13 @@ describe("single-step commands", () => {
   });
 
   it("Set API Key stores a new key for a Provider preset, changing no setting", async () => {
-    const { result, shown } = await setUp(setApiKey, [{ pick: "Enter an API key…" }, { input: "sk-new" }]);
-    expect(result).toEqual({
-      settings: {},
-      secret: { kind: "store", name: "apiKey.openai", value: "sk-new" },
-    });
+    const { secrets, shown, effects, requests } = await setUp("setApiKey", [
+      { pick: "Enter an API key…" },
+      { input: "sk-new" },
+    ]);
+    expect(secrets["apiKey.openai"]).toBe("sk-new");
+    expect(effects).toEqual(["store:apiKey.openai", "retry", "information"]);
+    expect(requests[0].headers.Authorization).toBe("Bearer sk-new");
     expect(shown).toMatchObject([
       { title: "Set API Key" },
       { title: "Enter API Key", password: true, required: true },
@@ -328,14 +417,143 @@ describe("single-step commands", () => {
   });
 
   it("Set API Key for a Custom provider writes the environment variable it reads and deletes the saved key", async () => {
-    const { result } = await setUp(
-      setApiKey,
+    const { settings, secrets, effects } = await setUp(
+      "setApiKey",
       [{ pick: "Read it from an environment variable…" }, { input: "MY_KEY" }],
       { settings: { provider: "custom", customBaseUrl: "http://localhost:11434/v1" } },
     );
-    expect(result).toEqual({
-      settings: { customApiKeyEnv: "MY_KEY" },
-      secret: { kind: "delete", name: "apiKey.custom" },
+    expect(settings.customApiKeyEnv).toBe("MY_KEY");
+    expect(secrets["apiKey.custom"]).toBeUndefined();
+    expect(effects).toEqual(["delete:apiKey.custom", "setting:customApiKeyEnv", "retry", "information"]);
+  });
+});
+
+describe("connection setup completion", () => {
+  it("tests an unchanged full setup and reports the connected provider", async () => {
+    const { settings, effects, requests, information } = await setUp(
+      "setUp",
+      [{ pick: "OpenAI" }, { pick: "Keep the saved key" }, { pick: "gpt-old" }],
+      {
+        secrets: { "apiKey.openai": "sk-saved" },
+        models: () => Response.json({ data: [{ id: "gpt-old" }] }),
+      },
+    );
+    expect(settings).toEqual(SETTINGS);
+    expect(effects).toEqual(["retry", "information"]);
+    expect(requests[1].body?.model).toBe("gpt-old");
+    expect(information).toEqual(["Connected to OpenAI · gpt-old. First token after 0 ms"]);
+  });
+
+  it.each([
+    {
+      command: "selectModel" as const,
+      answers: [{ pick: "vendor/other" }],
+      settings: { provider: "openrouter", model: "vendor/other" },
+      write: "setting:model",
+    },
+    {
+      command: "setReasoningEffort" as const,
+      answers: [{ pick: "low" }],
+      settings: { provider: "openrouter", reasoningEffort: "low" as const },
+      write: "setting:reasoningEffort",
+    },
+  ])(
+    "$command writes the selected value even when it is current",
+    async ({ command, answers, settings, write }) => {
+      const result = await setUp(command, answers, { settings });
+      expect(result.effects).toEqual([write, "retry", "information"]);
+    },
+  );
+
+  it("leaves a missing saved key alone without pinging", async () => {
+    const { settings, effects, requests, information } = await setUp("clearApiKey", []);
+    expect(settings).toEqual(SETTINGS);
+    expect(effects).toEqual(["information"]);
+    expect(requests).toEqual([]);
+    expect(information).toEqual(["No saved API key for OpenAI."]);
+  });
+
+  it("clears a saved key and pings using the environment fallback", async () => {
+    const { secrets, requests, effects } = await setUp("clearApiKey", [], {
+      secrets: { "apiKey.openai": "sk-saved" },
+      env: { OPENAI_API_KEY: "sk-env" },
     });
+    expect(secrets["apiKey.openai"]).toBeUndefined();
+    expect(requests).toEqual([
+      {
+        url: "https://api.openai.com/v1/chat/completions",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer sk-env" },
+        body: { model: "gpt-old", messages: [{ role: "user", content: "ping" }], stream: true },
+      },
+    ]);
+    expect(effects).toEqual(["delete:apiKey.openai", "retry", "information"]);
+  });
+
+  it("uses the same completion path for Test Connection", async () => {
+    const { effects, information } = await setUp("testConnection", [], {
+      env: { OPENAI_API_KEY: "sk-env" },
+      settings: { reasoningEffort: "high" },
+    });
+    expect(effects).toEqual(["retry", "information"]);
+    expect(information).toEqual(["Connected to OpenAI · gpt-old · effort high. First token after 0 ms"]);
+  });
+
+  it("keeps saved changes when ping fails and delegates the failure", async () => {
+    const { secrets, effects, failures, requests } = await setUp(
+      "setApiKey",
+      [{ pick: "Enter an API key…" }, { input: "sk-new" }],
+      { ping: () => Response.json({ error: { message: "Invalid key" } }, { status: 401 }) },
+    );
+    expect(secrets["apiKey.openai"]).toBe("sk-new");
+    expect(requests).toHaveLength(1);
+    expect(effects).toEqual(["store:apiKey.openai", "failure"]);
+    expect(failures[0]).toBeInstanceOf(ConnectionFailure);
+    expect(failures[0].message).toBe("Invalid key");
+    expect(failures[0].fix).toBe("setApiKey");
+  });
+
+  it.each([
+    { stopAt: "store:apiKey.custom", effects: ["store:apiKey.custom"], saved: undefined, provider: "openai" },
+    {
+      stopAt: "setting:provider",
+      effects: ["store:apiKey.custom", "setting:provider"],
+      saved: "sk-new",
+      provider: "openai",
+    },
+    {
+      stopAt: "setting:customBaseUrl",
+      effects: ["store:apiKey.custom", "setting:provider", "setting:customBaseUrl"],
+      saved: "sk-new",
+      provider: "custom",
+    },
+  ])("stops after a failed $stopAt write without pinging", async ({ stopAt, effects, saved, provider }) => {
+    const error = new Error("storage failed");
+    const harness = prepare(
+      "setUp",
+      [
+        { pick: "Custom…" },
+        { input: "http://localhost:11434/v1" },
+        { pick: "Enter an API key…" },
+        { input: "sk-new" },
+        { pick: "vendor/other" },
+      ],
+      { failWrite: (operation) => (operation === stopAt ? error : undefined) },
+    );
+    await expect(harness.run()).rejects.toBe(error);
+    expect(harness.effects).toEqual(effects);
+    expect(harness.secrets["apiKey.custom"]).toBe(saved);
+    expect(harness.settings.provider).toBe(provider);
+    expect(harness.requests.every((request) => request.url.endsWith("/models"))).toBe(true);
+  });
+
+  it("propagates unexpected errors from completion feedback", async () => {
+    const error = new Error("UI unavailable");
+    const harness = prepare("testConnection", [], {
+      env: { OPENAI_API_KEY: "sk-env" },
+      informationError: error,
+    });
+    await expect(harness.run()).rejects.toBe(error);
+    expect(harness.effects).toEqual(["retry", "information"]);
+    expect(harness.failures).toEqual([]);
   });
 });
