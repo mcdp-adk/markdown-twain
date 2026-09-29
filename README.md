@@ -10,7 +10,7 @@ Search for **markdown-twain** in VS Code's Extensions view and select **Install*
 code --install-extension mcdp-adk.markdown-twain
 ```
 
-The extension is for desktop VS Code. To build a VSIX from source, see [Releasing](docs/releasing.md#build-a-vsix-from-source).
+The extension is for desktop VS Code. To build a VSIX yourself, see [Build a VSIX from source](docs/releasing.md#build-a-vsix-from-source).
 
 ## Translate a document
 
