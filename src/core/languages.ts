@@ -2,7 +2,7 @@
 //
 // Source: Read Frog, https://github.com/mengxi-ream/read-frog
 // Commit b4a45b9, file src/locales/en.yml (the keys of `languages`).
-// Original license: GPL-3.0.
+// Original license: GPL-3.0-only.
 // Modified by markdown-twain, 2026-09-28:
 // - ISO 639-3 codes are converted to the shortest BCP 47 tag with
 //   Intl.getCanonicalLocales; cmn -> zh-Hans and cmn-Hant -> zh-Hant by hand.

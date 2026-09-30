@@ -6,7 +6,7 @@
   "private": true,
   "publisher": "mcdp-adk",
   "icon": "media/icon.png",
-  "license": "GPL-3.0-or-later",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "https://github.com/mcdp-adk/markdown-twain.git"
