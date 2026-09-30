@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2
 
 - Corrected the license to GPL-3.0-only, the license of the Read Frog prompt text markdown-twain adapts.
 
