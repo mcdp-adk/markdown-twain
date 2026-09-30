@@ -4,7 +4,7 @@
 // Commit b4a45b9, file src/utils/constants/prompt.ts
 // (DEFAULT_TRANSLATE_SYSTEM_PROMPT, DEFAULT_TRANSLATE_PROMPT,
 // DEFAULT_BATCH_TRANSLATE_PROMPT, and DEFAULT_SENTINEL_TRANSLATE_PROMPT).
-// Original license: GPL-3.0.
+// Original license: GPL-3.0-only.
 // Modified by markdown-twain, 2026-09-28:
 // - The HTML rule is replaced by a Markdown rule, since the input is inline
 //   Markdown.

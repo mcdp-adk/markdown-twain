@@ -80,4 +80,4 @@ For an NTLM or Digest proxy, use a local HTTP relay such as Cntlm or Px. For an 
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+Copyright (C) 2026 mcdp-adk. Licensed under GPL-3.0-only; includes prompt text adapted from Read Frog. See [LICENSE](LICENSE).
