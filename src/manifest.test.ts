@@ -30,12 +30,11 @@ it.each([
 });
 
 it("colors translations in the preview with the contributed theme color", () => {
-  const ids = manifest.contributes.colors.map((color: { id: string }) => color.id);
-  expect(ids).toContain("markdownTwain.translationForeground");
+  const [{ id }] = manifest.contributes.colors;
   // Webviews expose a theme color as `--vscode-` plus its id, with the dot as a dash.
-  expect(readFileSync("media/preview.css", "utf8")).toContain(
-    "color: var(--vscode-markdownTwain-translationForeground);",
-  );
+  const variable = `--vscode-${id.replace(".", "-")}`;
+  const rule = readFileSync("media/preview.css", "utf8").match(/^\.twain-t\s*\{([^}]*)\}/m)?.[1];
+  expect(rule).toMatch(new RegExp(`color:\\s*var\\(${variable}\\)`));
 });
 
 it("offers every Provider preset and the Custom provider", () => {
