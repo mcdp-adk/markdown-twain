@@ -24,6 +24,18 @@
     "markdown.previewStyles": [
       "./media/preview.css"
     ],
+    "colors": [
+      {
+        "id": "markdownTwain.translationForeground",
+        "description": "Text color of translations in the Markdown preview.",
+        "defaults": {
+          "light": "#00784e",
+          "dark": "#00bb7c",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      }
+    ],
     "commands": [
       {
         "command": "markdownTwain.pickDisplayMode",
@@ -554,6 +566,22 @@
             "high",
             "xhigh",
             "max"
+          ]
+        },
+        "markdownTwain.defaultDisplayMode": {
+          "type": "string",
+          "scope": "application",
+          "default": "originalOnly",
+          "markdownDescription": "The Display mode each new window starts in. Any mode other than `originalOnly` sends document text to the provider as soon as a Markdown preview opens.",
+          "enum": [
+            "originalOnly",
+            "bilingual",
+            "translationOnly"
+          ],
+          "enumItemLabels": [
+            "Original Only",
+            "Bilingual",
+            "Translation Only"
           ]
         }
       }

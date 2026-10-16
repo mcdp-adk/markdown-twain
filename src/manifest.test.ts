@@ -23,9 +23,19 @@ it.each([
   ["markdownTwain.customApiKeyEnv", ""],
   ["markdownTwain.model", ""],
   ["markdownTwain.reasoningEffort", "default"],
+  ["markdownTwain.defaultDisplayMode", "originalOnly"],
 ])("makes %s an application setting that defaults to %j", (name, defaultValue) => {
   const setting = manifest.contributes.configuration.properties[name];
   expect(setting).toMatchObject({ scope: "application", default: defaultValue });
+});
+
+it("colors translations in the preview with the contributed theme color", () => {
+  const ids = manifest.contributes.colors.map((color: { id: string }) => color.id);
+  expect(ids).toContain("markdownTwain.translationForeground");
+  // Webviews expose a theme color as `--vscode-` plus its id, with the dot as a dash.
+  expect(readFileSync("media/preview.css", "utf8")).toContain(
+    "color: var(--vscode-markdownTwain-translationForeground);",
+  );
 });
 
 it("offers every Provider preset and the Custom provider", () => {

@@ -5,11 +5,12 @@ body {
 body.vscode-dark {
   --twain-rule: rgba(255, 255, 255, 0.18);
 }
-body.vscode-high-contrast {
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) {
   --twain-rule: var(--vscode-contrastBorder, currentColor);
 }
+/* A theme color, so users can override it; its defaults are in package.json */
 .twain-t {
-  color: oklch(0.5 0.12 162.48); /* light: ≥5.1:1 */
+  color: var(--vscode-markdownTwain-translationForeground);
 }
 span.twain-t {
   display: block;
@@ -53,11 +54,7 @@ h6 + div.twain-t {
 li > p + div.twain-t {
   margin-bottom: 0.7em;
 }
-body.vscode-dark .twain-t {
-  color: oklch(0.693 0.17 162.48); /* Read Frog's green */
-}
-body.vscode-high-contrast .twain-t {
-  color: inherit;
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .twain-t {
   text-decoration: underline dashed;
   text-underline-offset: 4px;
 }

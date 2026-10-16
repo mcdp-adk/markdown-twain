@@ -196,6 +196,13 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
     ),
   );
   mirrorDisplayMode();
+  // Picked as if by the user, so a failed pre-flight check keeps Original Only and says why.
+  const defaultDisplayMode = vscode.workspace
+    .getConfiguration("markdownTwain")
+    .get<string>("defaultDisplayMode", "originalOnly");
+  if (defaultDisplayMode === "bilingual" || defaultDisplayMode === "translationOnly") {
+    void setDisplayMode(defaultDisplayMode);
+  }
 
   return {
     extendMarkdownIt: (md: MarkdownIt) => twain.markdownItPlugin(md),

@@ -1,6 +1,6 @@
 # markdown-twain
 
-markdown-twain translates VS Code's built-in Markdown preview with an LLM. It works in desktop VS Code 1.96 or later with a provider that supports the OpenAI-compatible Chat Completions API. You choose the provider, model, and Target language. Opening a preview in **Original Only** sends no document text to the provider; translation starts when you select a translated Display mode.
+markdown-twain translates VS Code's built-in Markdown preview with an LLM. It works in desktop VS Code 1.96 or later with a provider that supports the OpenAI-compatible Chat Completions API. You choose the provider, model, and Target language. Opening a preview in **Original Only** sends no document text to the provider; translation starts when you select a translated Display mode or [make one the default](#start-new-windows-in-a-translated-display-mode).
 
 ## Install
 
@@ -18,7 +18,7 @@ The extension is for desktop VS Code. To build a VSIX yourself, see [Build a VSI
 2. In VS Code **User** Settings, choose `markdownTwain.targetLanguage` if you want a language other than your VS Code display language. The default, `auto`, follows that display language. If it is unsupported, choose a language from the setting's list instead. Simplified and Traditional Chinese are separate choices. There is no source-language setting.
 3. Open a Markdown file and run **Markdown: Open Preview** from the Command Palette. In the preview title bar, select the globe button and choose **Bilingual** or **Translation Only**. You can also run **markdown-twain: Pick Display Mode** from the Command Palette.
 
-The status bar shows **Preparing…** and then a count of processed Blocks while translation runs. The preview keeps showing the source until the run finishes, then refreshes with the translations. Selecting **Original Only** restores the untranslated preview and stops translation work. The Display mode applies to previews in the current VS Code window and starts as Original Only in each new window.
+The status bar shows **Preparing…** and then a count of processed Blocks while translation runs. The preview keeps showing the source until the run finishes, then refreshes with the translations. Selecting **Original Only** restores the untranslated preview and stops translation work. The Display mode applies to previews in the current VS Code window and starts as Original Only in each new window, unless you [change the default](#start-new-windows-in-a-translated-display-mode).
 
 | Display mode | What you see |
 | --- | --- |
@@ -33,6 +33,24 @@ A **Block** is a heading, paragraph, or table cell; this includes prose in list 
 Code blocks, math blocks, front matter, raw HTML blocks, and paragraphs containing only an image are left unchanged in the preview. Paragraphs containing only inline code, inline math, or inline HTML are also skipped. In prose that contains Markdown formatting, the model is instructed to preserve links, URLs, and inline code.
 
 **What is sent to the provider:** Before translating a document's Blocks, the extension sends up to the first 12,000 characters of the document's raw text to create a Document brief for consistent terminology. This can include code, math, HTML, and images that remain untranslated in the preview. It then sends the Blocks that need translation. A mixed prose paragraph is sent as inline Markdown. Preserving inline content is best effort: the model is instructed to keep Markdown syntax, URLs, and inline code unchanged, but its response is not structurally validated. Inline math, inline HTML, and image alt text may also change. The [v1 spec](https://github.com/mcdp-adk/markdown-twain/issues/19) describes this boundary.
+
+## Customize
+
+### Start new windows in a translated Display mode
+
+Set `markdownTwain.defaultDisplayMode` in VS Code **User** Settings to `bilingual` or `translationOnly`. Each new window then starts in that Display mode and sends document text to the provider without a pick. If the LLM connection isn't ready, the window stays in Original Only and a notification offers the fix.
+
+### Change the translation color
+
+Set the `markdownTwain.translationForeground` theme color in VS Code **User** Settings:
+
+```jsonc
+"workbench.colorCustomizations": {
+  "markdownTwain.translationForeground": "#d97706"
+}
+```
+
+To set it for one theme only, put it inside a `"[Theme Name]": { … }` entry.
 
 ## LLM connection
 
