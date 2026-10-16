@@ -80,6 +80,8 @@ export function createTwain(deps: TwainDeps): Twain {
   return {
     markdownItPlugin,
     setDisplayMode: (mode: DisplayMode): Promise<Failure | undefined> => execution.setDisplayMode(mode),
+    applyDefaultDisplayMode: (raw: unknown): Promise<Failure | undefined> =>
+      execution.applyDefaultDisplayMode(raw),
     settingsChanged: () => execution.settingsChanged(),
     get displayMode() {
       return execution.displayMode;

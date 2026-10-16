@@ -61,10 +61,12 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
     const actions = [...(fix ? [fix[0]] : []), ...(retry ? ["Retry"] : [])];
     runFailureAction(await vscode.window.showErrorMessage(error.message, ...actions), fix);
   };
-  const setDisplayMode = async (mode: DisplayMode) => {
-    const failure = await twain.setDisplayMode(mode);
+  const finishDisplayModeChange = async (failure: Failure | undefined) => {
     mirrorDisplayMode();
     if (failure) await showFailure(failure);
+  };
+  const setDisplayMode = async (mode: DisplayMode) => {
+    await finishDisplayModeChange(await twain.setDisplayMode(mode));
   };
   const pickDisplayMode = async () => {
     const modes: { label: string; mode: DisplayMode }[] = [
@@ -197,12 +199,9 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
   );
   mirrorDisplayMode();
   // Picked as if by the user, so a failed pre-flight check keeps Original Only and says why.
-  const defaultDisplayMode = vscode.workspace
-    .getConfiguration("markdownTwain")
-    .get<string>("defaultDisplayMode", "originalOnly");
-  if (defaultDisplayMode === "bilingual" || defaultDisplayMode === "translationOnly") {
-    void setDisplayMode(defaultDisplayMode);
-  }
+  void twain
+    .applyDefaultDisplayMode(vscode.workspace.getConfiguration("markdownTwain").get("defaultDisplayMode"))
+    .then(finishDisplayModeChange);
 
   return {
     extendMarkdownIt: (md: MarkdownIt) => twain.markdownItPlugin(md),

@@ -77,6 +77,8 @@ export interface TranslationExecution {
   /** Starts a render and records the latest document even when it has no Blocks. */
   beginRender(document: unknown): RenderSession;
   setDisplayMode(mode: DisplayMode): Promise<Failure | undefined>;
+  /** Picks a translated startup Display mode as if the user picked it; ignores anything else. */
+  applyDefaultDisplayMode(raw: unknown): Promise<Failure | undefined>;
   /** Restarts translation after a markdownTwain setting changes. */
   settingsChanged(): void;
   readonly displayMode: DisplayMode;
@@ -494,29 +496,35 @@ export function createTranslation(deps: TranslationDeps): TranslationExecution {
     stopQuietPeriod();
   }
 
+  async function setDisplayMode(next: DisplayMode): Promise<Failure | undefined> {
+    const version = ++modePickVersion;
+    if (next !== "originalOnly") {
+      const check = await preflight(deps.settings());
+      if (version !== modePickVersion) return;
+      if (check.failure) {
+        if (mode !== "originalOnly") {
+          abortRun();
+          clearFailures();
+          mode = "originalOnly";
+          deps.refresh();
+          updateStatus();
+        }
+        return check.failure;
+      }
+    }
+    if (next === "originalOnly") abortRun();
+    clearFailures();
+    mode = next;
+    deps.refresh();
+    updateStatus();
+  }
+
   return {
     beginRender,
-    async setDisplayMode(next) {
-      const version = ++modePickVersion;
-      if (next !== "originalOnly") {
-        const check = await preflight(deps.settings());
-        if (version !== modePickVersion) return;
-        if (check.failure) {
-          if (mode !== "originalOnly") {
-            abortRun();
-            clearFailures();
-            mode = "originalOnly";
-            deps.refresh();
-            updateStatus();
-          }
-          return check.failure;
-        }
-      }
-      if (next === "originalOnly") abortRun();
-      clearFailures();
-      mode = next;
-      deps.refresh();
-      updateStatus();
+    setDisplayMode,
+    async applyDefaultDisplayMode(raw: unknown): Promise<Failure | undefined> {
+      if (raw !== "bilingual" && raw !== "translationOnly") return undefined;
+      return setDisplayMode(raw);
     },
     settingsChanged() {
       modePickVersion++;

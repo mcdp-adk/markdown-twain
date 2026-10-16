@@ -117,6 +117,46 @@ describe("scenario 14: pre-flight checks", () => {
   });
 });
 
+describe("startup default Display mode", () => {
+  it.each(["bilingual", "translationOnly"] as const)(
+    "applies the %s default like a user pick and translates the preview",
+    async (mode) => {
+      const s = scenario();
+      expect(await s.twain.applyDefaultDisplayMode(mode)).toBeUndefined();
+      expect(s.twain.displayMode).toBe(mode);
+      s.render(DOC, "Hello.\n");
+      await s.settle();
+      expect(s.render(DOC, "Hello.\n")).toContain("译 Hello.");
+    },
+  );
+
+  it("keeps originalOnly and reports the fix when the LLM connection is broken", async () => {
+    const s = scenario({ settings: { model: "" } });
+    expect(await s.twain.applyDefaultDisplayMode("bilingual")).toEqual({
+      message: "Select a model.",
+      fix: "selectModel",
+    });
+    expect(s.twain.displayMode).toBe("originalOnly");
+    expect(s.refreshes).toBe(0);
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.requests).toHaveLength(0);
+  });
+
+  it.each([["originalOnly"], [undefined], ["all"], [123]])(
+    "ignores default %s without refreshing or requesting",
+    async (raw) => {
+      const s = scenario();
+      expect(await s.twain.applyDefaultDisplayMode(raw)).toBeUndefined();
+      expect(s.twain.displayMode).toBe("originalOnly");
+      expect(s.refreshes).toBe(0);
+      s.render(DOC, "Hello.\n");
+      await s.settle();
+      expect(s.requests).toHaveLength(0);
+    },
+  );
+});
+
 const MIXED = `---
 title: Front matter is not a Block
 ---
