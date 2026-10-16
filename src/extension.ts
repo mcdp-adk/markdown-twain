@@ -14,6 +14,11 @@ import {
 } from "./core/connection-setup.ts";
 import type { ReasoningEffort } from "./core/providers.ts";
 import type { Settings } from "./core/request.ts";
+import {
+  TRANSLATION_COLOR,
+  translationColorProblem,
+  withTranslationColor,
+} from "./core/translation-color.ts";
 import { createTwain, type DisplayMode, type Failure, type Status } from "./core/twain.ts";
 
 const FIX_ACTIONS = {
@@ -193,6 +198,7 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt(m
     vscode.commands.registerCommand("markdownTwain.setApiKey", connection.setApiKey),
     vscode.commands.registerCommand("markdownTwain.clearApiKey", connection.clearApiKey),
     vscode.commands.registerCommand("markdownTwain.testConnection", connection.testConnection),
+    vscode.commands.registerCommand("markdownTwain.setTranslationColor", setTranslationColor),
     vscode.commands.registerCommand("markdownTwain.openTargetLanguageSetting", () =>
       vscode.commands.executeCommand("workbench.action.openSettings", "markdownTwain.targetLanguage"),
     ),
@@ -212,6 +218,24 @@ export function deactivate(): void {}
 
 function blocks(count: number): string {
   return count === 1 ? "1 Block" : `${count} Blocks`;
+}
+
+async function setTranslationColor(): Promise<void> {
+  const workbench = vscode.workspace.getConfiguration("workbench");
+  const customizations = workbench.inspect<Record<string, unknown>>("colorCustomizations")?.globalValue;
+  const current = customizations?.[TRANSLATION_COLOR];
+  const color = await vscode.window.showInputBox({
+    title: "Set Translation Color",
+    value: typeof current === "string" ? current : "",
+    prompt: "A hex color such as #d97706. Leave it empty for the default colors.",
+    validateInput: (value) => translationColorProblem(value.trim()),
+  });
+  if (color === undefined) return;
+  await workbench.update(
+    "colorCustomizations",
+    withTranslationColor(customizations, color.trim()),
+    vscode.ConfigurationTarget.Global,
+  );
 }
 
 function readSettings(): Settings {

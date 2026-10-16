@@ -42,15 +42,15 @@ Set `markdownTwain.defaultDisplayMode` in VS Code **User** Settings to `bilingua
 
 ### Change the translation color
 
-Set the `markdownTwain.translationForeground` theme color in VS Code **User** Settings:
+Run **markdown-twain: Set Translation Color** from the Command Palette and enter a hex color such as `#d97706`. Leave it empty to go back to the default colors. Open previews change color right away.
+
+The command sets the `markdownTwain.translationForeground` theme color for every theme. To set it for one theme only, edit `workbench.colorCustomizations` in **Preferences: Open User Settings (JSON)**:
 
 ```jsonc
 "workbench.colorCustomizations": {
-  "markdownTwain.translationForeground": "#d97706"
+  "[Dark Modern]": { "markdownTwain.translationForeground": "#fbbf24" }
 }
 ```
-
-To set it for one theme only, put it inside a `"[Theme Name]": { … }` entry.
 
 ## LLM connection
 
