@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - `markdownTwain.defaultDisplayMode` sets the Display mode new windows start in. It defaults to Original Only.
 - The translation color can be changed through the `markdownTwain.translationForeground` theme color. The default colors are unchanged.
