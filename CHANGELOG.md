@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **markdown-twain: Set Translation Color** sets the translation color without editing JSON. An empty value restores the default colors.
+
 ## 0.2.0
 
 - `markdownTwain.defaultDisplayMode` sets the Display mode new windows start in. It defaults to Original Only.

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { CUSTOM_PROVIDER_ID, PROVIDER_PRESETS, REASONING_EFFORTS } from "./core/providers.ts";
 import { targetLanguageEnum } from "./core/target-language.ts";
+import { TRANSLATION_COLOR } from "./core/translation-color.ts";
 
 // Vitest runs from the repo root.
 const manifest = JSON.parse(readFileSync("package.json", "utf8"));
@@ -31,6 +32,7 @@ it.each([
 
 it("colors translations in the preview with the contributed theme color", () => {
   const [{ id }] = manifest.contributes.colors;
+  expect(id).toBe(TRANSLATION_COLOR);
   // Webviews expose a theme color as `--vscode-` plus its id, with the dot as a dash.
   const variable = `--vscode-${id.replace(".", "-")}`;
   const rule = readFileSync("media/preview.css", "utf8").match(/^\.twain-t\s*\{([^}]*)\}/m)?.[1];
@@ -71,13 +73,18 @@ it("offers one mode-aware title button on the focused Markdown preview", () => {
   expect(Object.keys(manifest.contributes.menus)).toEqual(["commandPalette", "editor/title"]);
 });
 
-it("offers the Display mode picker and Translation Only in the Command Palette", () => {
+it("offers the Display mode picker, Translation Only and Set Translation Color in the Command Palette", () => {
   expect(manifest.contributes.commands).toEqual(
     expect.arrayContaining([
       { command: "markdownTwain.pickDisplayMode", title: "Pick Display Mode", category: "markdown-twain" },
       {
         command: "markdownTwain.showTranslationOnly",
         title: "Show Translation Only",
+        category: "markdown-twain",
+      },
+      {
+        command: "markdownTwain.setTranslationColor",
+        title: "Set Translation Color",
         category: "markdown-twain",
       },
     ]),
