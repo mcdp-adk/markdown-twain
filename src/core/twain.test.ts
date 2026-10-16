@@ -117,6 +117,46 @@ describe("scenario 14: pre-flight checks", () => {
   });
 });
 
+describe("startup default Display mode", () => {
+  it.each(["bilingual", "translationOnly"] as const)(
+    "applies the %s default like a user pick and translates the preview",
+    async (mode) => {
+      const s = scenario();
+      expect(await s.twain.applyDefaultDisplayMode(mode)).toBeUndefined();
+      expect(s.twain.displayMode).toBe(mode);
+      s.render(DOC, "Hello.\n");
+      await s.settle();
+      expect(s.render(DOC, "Hello.\n")).toContain("译 Hello.");
+    },
+  );
+
+  it("keeps originalOnly and reports the fix when the LLM connection is broken", async () => {
+    const s = scenario({ settings: { model: "" } });
+    expect(await s.twain.applyDefaultDisplayMode("bilingual")).toEqual({
+      message: "Select a model.",
+      fix: "selectModel",
+    });
+    expect(s.twain.displayMode).toBe("originalOnly");
+    expect(s.refreshes).toBe(0);
+    s.render(DOC, "Hello.\n");
+    await s.settle();
+    expect(s.requests).toHaveLength(0);
+  });
+
+  it.each([["originalOnly"], [undefined], ["all"], [123]])(
+    "ignores default %s without refreshing or requesting",
+    async (raw) => {
+      const s = scenario();
+      expect(await s.twain.applyDefaultDisplayMode(raw)).toBeUndefined();
+      expect(s.twain.displayMode).toBe("originalOnly");
+      expect(s.refreshes).toBe(0);
+      s.render(DOC, "Hello.\n");
+      await s.settle();
+      expect(s.requests).toHaveLength(0);
+    },
+  );
+});
+
 const MIXED = `---
 title: Front matter is not a Block
 ---
@@ -1074,6 +1114,24 @@ describe("scenario 13: settings changes", () => {
     expect(s.refreshes).toBe(refreshesBefore);
     expect(s.requests).toHaveLength(0);
     expect(s.twain.status).toEqual({ kind: "idle" });
+  });
+
+  it("leaves a run alone when settings are unchanged", async () => {
+    const s = scenario({ latencyMs: LATENCY_MS * 10 });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.advance(QUIET_MS + LATENCY_MS * 10 + 1);
+    expect(s.sent).toHaveLength(1);
+    const refreshesBefore = s.refreshes;
+    const abortedBefore = s.aborted;
+
+    s.twain.settingsChanged();
+    expect(s.aborted).toBe(abortedBefore);
+    expect(s.refreshes).toBe(refreshesBefore);
+
+    await s.settle();
+    expect(s.sent).toHaveLength(1);
+    expect(s.render(DOC, "Hello.\n")).toContain('<div class="twain-t">译 Hello.</div>');
   });
 });
 

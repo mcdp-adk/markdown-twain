@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `markdownTwain.defaultDisplayMode` sets the Display mode new windows start in. It defaults to Original Only.
+- The translation color can be changed through the `markdownTwain.translationForeground` theme color. The default colors are unchanged.
+- Light high-contrast themes now get the same translation style as dark high-contrast themes.
+
 ## 0.1.2
 
 - Corrected the license to GPL-3.0-only, the license of the Read Frog prompt text markdown-twain adapts.

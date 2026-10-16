@@ -77,7 +77,9 @@ export interface TranslationExecution {
   /** Starts a render and records the latest document even when it has no Blocks. */
   beginRender(document: unknown): RenderSession;
   setDisplayMode(mode: DisplayMode): Promise<Failure | undefined>;
-  /** Restarts translation after a markdownTwain setting changes. */
+  /** Picks a translated startup Display mode as if the user picked it; ignores anything else. */
+  applyDefaultDisplayMode(raw: unknown): Promise<Failure | undefined>;
+  /** Restarts translation when the settings translation reads changed; does nothing when unchanged. */
   settingsChanged(): void;
   readonly displayMode: DisplayMode;
   /** Clears the failed set, and refreshes if the mode is translated. */
@@ -145,6 +147,8 @@ export function createTranslation(deps: TranslationDeps): TranslationExecution {
   let failuresSinceRetry = { count: 0, total: 0 };
   let halted: Failure | undefined;
   let modePickVersion = 0;
+  /** The settings translation last restarted for, taken when the core is created. */
+  let lastSettingsJson = JSON.stringify(deps.settings());
   let status: Status = { kind: "idle" };
   const statusListeners: ((status: Status) => void)[] = [];
   const runEndListeners: ((event: RunEnd) => void)[] = [];
@@ -494,31 +498,40 @@ export function createTranslation(deps: TranslationDeps): TranslationExecution {
     stopQuietPeriod();
   }
 
+  async function setDisplayMode(next: DisplayMode): Promise<Failure | undefined> {
+    const version = ++modePickVersion;
+    if (next !== "originalOnly") {
+      const check = await preflight(deps.settings());
+      if (version !== modePickVersion) return;
+      if (check.failure) {
+        if (mode !== "originalOnly") {
+          abortRun();
+          clearFailures();
+          mode = "originalOnly";
+          deps.refresh();
+          updateStatus();
+        }
+        return check.failure;
+      }
+    }
+    if (next === "originalOnly") abortRun();
+    clearFailures();
+    mode = next;
+    deps.refresh();
+    updateStatus();
+  }
+
   return {
     beginRender,
-    async setDisplayMode(next) {
-      const version = ++modePickVersion;
-      if (next !== "originalOnly") {
-        const check = await preflight(deps.settings());
-        if (version !== modePickVersion) return;
-        if (check.failure) {
-          if (mode !== "originalOnly") {
-            abortRun();
-            clearFailures();
-            mode = "originalOnly";
-            deps.refresh();
-            updateStatus();
-          }
-          return check.failure;
-        }
-      }
-      if (next === "originalOnly") abortRun();
-      clearFailures();
-      mode = next;
-      deps.refresh();
-      updateStatus();
+    setDisplayMode,
+    async applyDefaultDisplayMode(raw: unknown): Promise<Failure | undefined> {
+      if (raw !== "bilingual" && raw !== "translationOnly") return undefined;
+      return setDisplayMode(raw);
     },
     settingsChanged() {
+      const settingsJson = JSON.stringify(deps.settings());
+      if (settingsJson === lastSettingsJson) return;
+      lastSettingsJson = settingsJson;
       modePickVersion++;
       abortRun();
       clearFailures();
