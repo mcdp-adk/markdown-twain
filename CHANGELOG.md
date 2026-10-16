@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
 
 - **markdown-twain: Set Translation Color** sets the translation color without editing JSON. An empty value restores the default colors.
 
