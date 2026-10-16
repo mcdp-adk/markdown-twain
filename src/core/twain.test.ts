@@ -1115,6 +1115,24 @@ describe("scenario 13: settings changes", () => {
     expect(s.requests).toHaveLength(0);
     expect(s.twain.status).toEqual({ kind: "idle" });
   });
+
+  it("leaves a run alone when settings are unchanged", async () => {
+    const s = scenario({ latencyMs: LATENCY_MS * 10 });
+    await s.setDisplayMode("bilingual");
+    s.render(DOC, "Hello.\n");
+    await s.advance(QUIET_MS + LATENCY_MS * 10 + 1);
+    expect(s.sent).toHaveLength(1);
+    const refreshesBefore = s.refreshes;
+    const abortedBefore = s.aborted;
+
+    s.twain.settingsChanged();
+    expect(s.aborted).toBe(abortedBefore);
+    expect(s.refreshes).toBe(refreshesBefore);
+
+    await s.settle();
+    expect(s.sent).toHaveLength(1);
+    expect(s.render(DOC, "Hello.\n")).toContain('<div class="twain-t">译 Hello.</div>');
+  });
 });
 
 describe("request failure handling", () => {

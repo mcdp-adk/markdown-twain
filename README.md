@@ -38,7 +38,7 @@ Code blocks, math blocks, front matter, raw HTML blocks, and paragraphs containi
 
 ### Start new windows in a translated Display mode
 
-Set `markdownTwain.defaultDisplayMode` in VS Code **User** Settings to `bilingual` or `translationOnly`. Each new window then starts in that Display mode and sends document text to the provider without a pick. If the LLM connection isn't ready, the window stays in Original Only and a notification offers the fix.
+Set `markdownTwain.defaultDisplayMode` in VS Code **User** Settings to `bilingual` or `translationOnly`. Each new window then starts in that Display mode and sends document text to the provider without a pick. If the LLM connection isn't ready, the window stays in Original Only and a notification offers the fix. A window reads the setting once, when markdown-twain starts in it.
 
 ### Change the translation color
 

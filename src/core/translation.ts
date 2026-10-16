@@ -79,7 +79,7 @@ export interface TranslationExecution {
   setDisplayMode(mode: DisplayMode): Promise<Failure | undefined>;
   /** Picks a translated startup Display mode as if the user picked it; ignores anything else. */
   applyDefaultDisplayMode(raw: unknown): Promise<Failure | undefined>;
-  /** Restarts translation after a markdownTwain setting changes. */
+  /** Restarts translation when the settings translation reads changed; does nothing when unchanged. */
   settingsChanged(): void;
   readonly displayMode: DisplayMode;
   /** Clears the failed set, and refreshes if the mode is translated. */
@@ -147,6 +147,8 @@ export function createTranslation(deps: TranslationDeps): TranslationExecution {
   let failuresSinceRetry = { count: 0, total: 0 };
   let halted: Failure | undefined;
   let modePickVersion = 0;
+  /** The settings translation last restarted for, taken when the core is created. */
+  let lastSettingsJson = JSON.stringify(deps.settings());
   let status: Status = { kind: "idle" };
   const statusListeners: ((status: Status) => void)[] = [];
   const runEndListeners: ((event: RunEnd) => void)[] = [];
@@ -527,6 +529,9 @@ export function createTranslation(deps: TranslationDeps): TranslationExecution {
       return setDisplayMode(raw);
     },
     settingsChanged() {
+      const settingsJson = JSON.stringify(deps.settings());
+      if (settingsJson === lastSettingsJson) return;
+      lastSettingsJson = settingsJson;
       modePickVersion++;
       abortRun();
       clearFailures();
