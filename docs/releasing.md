@@ -6,7 +6,7 @@ Uploads are manual because Azure DevOps personal access tokens, which `vsce publ
 
 ## Release a version
 
-1. In a pull request, bump `version` in `package.json` and add an entry for it to `CHANGELOG.md`. Merge it.
+1. In a pull request titled `chore: release <version>`, bump `version` in `package.json` and add an entry for it to `CHANGELOG.md`. Merge it.
 2. Tag the merge commit and push the tag:
 
    ```sh
